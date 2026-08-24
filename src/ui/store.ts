@@ -268,6 +268,10 @@ function closeFrozenOverlay(flag: Signal<boolean>): void {
 /** Open the pause menu and freeze the sim (ESC during battle). */
 export function openPauseMenu(): void {
   if (screen.value !== 'battle') return;
+  // The battle is over and the standings own the screen (they sit ABOVE every battle overlay):
+  // a pause menu raised here would be invisible underneath them, with the sim frozen and the
+  // standings still taking the click. There is nothing left to pause, so ESC does nothing.
+  if (warStandings.value) return;
   showDepot.value = false; // never leave the depot open behind the pause menu
   openFrozenOverlay(showPause);
 }
@@ -293,6 +297,20 @@ export function openHelp(): void {
 /** Close Help and unfreeze the sim. */
 export function closeHelp(): void {
   closeFrozenOverlay(showHelp);
+}
+
+/** Lower every battle-scoped modal (quit confirm / help / depot / pause). Used when the battle ENDS
+ *  underneath one: the standings screen takes the whole screen from that moment, so a left-open
+ *  overlay would hang around over the frozen battle — and the depot card, drawn under the
+ *  transparent standings layer, turns the whole thing into unreadable overlapping text. Each goes
+ *  through its own close so the sim-freeze and the history entry unwind exactly as they would on a
+ *  manual close. At most one of these is ever open at a time (each open path lowers the others), so
+ *  this pops at most one route entry. */
+export function closeBattleOverlays(): void {
+  if (showQuitConfirm.value) cancelQuitBattle();
+  if (showHelp.value) closeHelp();
+  if (showDepot.value) closeDepot();
+  if (showPause.value) resumeGame();
 }
 
 // ==========================================================================
@@ -1082,8 +1100,13 @@ export function syncHud(): void {
   winner.value = c.getWinnerName();
   // Between-battles standings: compute once on entering BattleEnd, clear on leaving.
   const atBattleEnd = c.getState() === EGameState.BattleEnd;
-  if (atBattleEnd && !warStandings.value) warStandings.value = c.getWarStandings();
-  else if (!atBattleEnd && warStandings.value) warStandings.value = null;
+  if (atBattleEnd && !warStandings.value) {
+    // A battle can end while a modal is up — the last enemy dying PASSIVELY (radiation, a mine, the
+    // turn timer) needs no input, so the depot/Help can still be open at that instant. Lower them
+    // first: the standings are what the player has to click past now.
+    closeBattleOverlays();
+    warStandings.value = c.getWarStandings();
+  } else if (!atBattleEnd && warStandings.value) warStandings.value = null;
   // Battle Heroes won/lost tally: advance once per battle end (the controller hands
   // the outcome over exactly once, so polling here is safe).
   const outcome = c.takeBattleOutcome();
