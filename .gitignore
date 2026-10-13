@@ -18,3 +18,10 @@ scripts/deploy.env
 
 # Public assets
 public/
+# Local-only files that must never be committed: the original 2005/2007 game packages (copyrighted), a
+# repo dump, dev-server output and agent scratch state.
+original_exe/
+data_pc.pak
+repomix-output.xml
+nohup.out
+.omc/
