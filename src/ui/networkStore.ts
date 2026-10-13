@@ -5,7 +5,8 @@
  * {@link NetGame}, which owns the turn bridge (see `onGameMessage` below).
  */
 import {signal} from '@preact/signals';
-import {RoomClient, DEFAULT_SETTINGS, type RoomClientState} from '../net/roomClient';
+import {RoomClient, DEFAULT_SETTINGS, fetchRoomList, type RoomClientState} from '../net/roomClient';
+import type {RoomListing} from '../net/roomList';
 import type {MatchConfig} from '../net/protocol';
 import {NetGame} from '../net/netGame';
 import {normalizeRoomCode, isValidRoomCode} from '../net/roomCode';
@@ -75,6 +76,46 @@ const nameStore = createPersistedSignal<string>('atomic.net.name', {
 });
 export const playerName = nameStore.signal;
 export const setPlayerName = (name: string): void => nameStore.set(name);
+
+// ==========================================================================
+// OPEN ROOM LIST
+//
+// The entry screen's list of rooms open to join. Polled while the screen is
+// up (and the tab is visible); a failed poll keeps the last list and flags it
+// offline so the screen can say so without blanking.
+// ==========================================================================
+
+const ROOM_POLL_MS = 4000;
+
+/** The polled open-room list and whether the last poll worked. */
+export const roomList = signal<{rooms: RoomListing[]; status: 'loading' | 'ok' | 'offline'}>({
+  rooms: [],
+  status: 'loading',
+});
+
+let roomPoll: ReturnType<typeof setInterval> | null = null;
+
+async function pollRooms(): Promise<void> {
+  if (typeof document !== 'undefined' && document.hidden) return; // nobody is looking
+  try {
+    roomList.value = {rooms: await fetchRoomList(), status: 'ok'};
+  } catch {
+    roomList.value = {rooms: roomList.value.rooms, status: 'offline'};
+  }
+}
+
+/** Begin polling now and every ROOM_POLL_MS. Safe to call twice. */
+export function startRoomPolling(): void {
+  if (roomPoll) return;
+  void pollRooms();
+  roomPoll = setInterval(() => void pollRooms(), ROOM_POLL_MS);
+}
+
+/** Stop polling; the last list stays in place. */
+export function stopRoomPolling(): void {
+  if (roomPoll) clearInterval(roomPoll);
+  roomPoll = null;
+}
 
 let client: RoomClient | null = null;
 let netGame: NetGame | null = null;
@@ -188,6 +229,7 @@ export function leaveRoom(): void {
 
 /** Tear down without a graceful leave (e.g. navigating away). */
 export function resetNet(): void {
+  stopRoomPolling();
   teardown(c => c.close());
 }
 

@@ -50,6 +50,7 @@ import {
   POWER_MAX,
   wrapAngle,
 } from './ui/store';
+import {diagFrame, installNetDiag} from './net/netDiag';
 
 export async function startApp(): Promise<void> {
   // ========================================================================
@@ -560,7 +561,10 @@ export async function startApp(): Promise<void> {
     compositor.app.ticker.maxFPS = maxFps.value;
   });
 
+  // Network diagnostics: `netLog()` on window, uncaught errors into the ring, and a check that this loop keeps ticking.
+  installNetDiag(() => gameController.isNetBattleActive());
   compositor.app.ticker.add(ticker => {
+    diagFrame();
     const dt = Math.min(ticker.deltaMS / 1000, 0.1);
     // Self-heal the viewport. The refit above is driven by a `resize` event / ResizeObserver, but
     // some real size changes never deliver a usable callback — most notably opening the page with

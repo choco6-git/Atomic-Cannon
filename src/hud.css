@@ -1458,22 +1458,22 @@ canvas {
    CANNON" logo, flagging this as an unofficial fan recreation. The text itself is
    a bitmap-font canvas (<SplashBadge> → <BmpText>), so this rule is layout only.
 
-   The title.webp backdrop (1600×893) is drawn `top center / cover`, so a fixed
+   The title.webp backdrop (1024×768) is drawn `top center / cover`, so a fixed
    percentage would drift into the letters as the window widens (the logo scales
    with width, not the viewport). Instead we reproduce the cover math: --disp-w /
    --disp-h are the image's ACTUAL rendered size, and the logo's bottom-right
-   corner — measured at 84.3% × 15.2% of the source image — is projected back into
+   corner — measured at 95.3% × 15.4% of the source image — is projected back into
    viewport space. The badge then straddles that corner via translate().
    The wrapper owns the position + tilt; the inner <span> owns the scale pulse, so
    the two transforms never clobber each other. Tune angle via the var. */
 .mainmenu-splash {
   --splash-tilt: -20deg; /* bump toward -45deg for a steeper lean */
-  /* Rendered size of the cover-scaled backdrop (scale = max(vw/1600, vh/893)). */
-  --disp-w: max(100vw, calc(100vh * 1600 / 893));
-  --disp-h: max(100vh, calc(100vw * 893 / 1600));
+  /* Rendered size of the cover-scaled backdrop (scale = max(vw/1024, vh/768)). */
+  --disp-w: max(100vw, calc(100vh * 1024 / 768));
+  --disp-h: max(100vh, calc(100vw * 768 / 1024));
   position: absolute;
-  left: calc(50vw + 0.33 * var(--disp-w));
-  top: calc(0.152 * var(--disp-h));
+  left: calc(50vw + 0.44 * var(--disp-w)); /* corner at 0.953 - 0.5 = 0.453, nudged 0.013 left */
+  top: calc(0.154 * var(--disp-h));
   z-index: var(--z-screen);
   pointer-events: none; /* purely decorative — never eats clicks meant for the nav */
   /* Anchor by the text's CENTRE (translateX(-50%)) so different-length splash strings
@@ -2335,6 +2335,34 @@ canvas {
   letter-spacing: 0.18em;
   text-transform: uppercase;
   font-size: 18px;
+}
+/* Open-room list on the entry screen: one clickable row per room. The whole screen already scrolls
+   (ClassicScrollbar), so the list just grows. */
+.net-rooms {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.net-room {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  width: 100%;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--green-line-strong);
+  cursor: pointer;
+}
+.net-room:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+.net-room-off {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .net-divider {
   width: 100%;

@@ -18,6 +18,8 @@ import {
   PROTOCOL_VERSION,
 } from './protocol';
 import {WebSocketTransport, type NetTransport, type ConnStatus} from './transport';
+import {parseRoomsResponse, type RoomListing} from './roomList';
+import {diag, briefMsg} from './netDiag';
 
 // ==========================================================================
 // INTERFACES & TYPES
@@ -65,11 +67,11 @@ export interface RoomClientOptions {
 // ==========================================================================
 
 export const DEFAULT_SETTINGS: RoomSettings = {
-  maxPlayers: 6,
+  maxPlayers: 2,
   minPlayers: 2,
   battles: 2,
   wind: 1,
-  mapSize: 2,
+  mapSize: 1,
   tanksPerTeam: 1,
   alternateTurns: false,
 };
@@ -145,6 +147,7 @@ export class RoomClient {
   }
 
   private onStatus(status: ConnStatus): void {
+    diag('status', status);
     this.patch({status});
     // (Re)identify whenever the socket opens — the same path handles first
     // connect and reconnect (the token resumes an existing slot).
@@ -157,6 +160,7 @@ export class RoomClient {
         color: this.opts.identity.color,
         reconnect: this.m_reconnectToken ?? undefined,
       };
+      diag('ws->', `hello${hello.reconnect ? ' (reconnect)' : ''}`);
       this.m_transport?.send(hello);
     } else if (status === 'closed' && this.m_state.phase !== 'error') {
       this.patch({phase: 'closed'});
@@ -168,6 +172,7 @@ export class RoomClient {
   // ========================================================================
 
   private onMessage(msg: ServerMessage): void {
+    diag('ws<-', briefMsg(msg));
     switch (msg.t) {
       case 'welcome':
         this.m_reconnectToken = msg.reconnect;
@@ -194,6 +199,7 @@ export class RoomClient {
         this.patch({config: msg.config});
         return;
       case 'error':
+        diag('client', `server error ${msg.code} puts the client in phase 'error' (hides the in-battle banner)`);
         this.patch({phase: 'error', lastError: {code: msg.code, message: msg.message}});
         this.opts.onState?.(this.m_state);
         return;
@@ -209,6 +215,8 @@ export class RoomClient {
       case 'turnBegin':
       case 'cmd':
       case 'stateUpdate':
+      case 'nextBattle': // the war advances / ends on the server's word (NetGame owns both)
+      case 'gameOver':
       case 'chat':
       case 'desyncFlag':
         this.opts.onGameMessage?.(msg);
@@ -242,6 +250,7 @@ export class RoomClient {
   }
   /** Send a gameplay message (turn command / shot result) once playing. */
   send(msg: ClientMessage): void {
+    diag('ws->', briefMsg(msg));
     this.m_transport?.send(msg);
   }
 
@@ -283,4 +292,11 @@ function defaultMintCode(origin: string): () => Promise<string> {
     const data = (await res.json()) as {code: string};
     return data.code;
   };
+}
+
+/** The open rooms to show on the entry screen: `GET /api/rooms`, validated and with bad entries dropped. */
+export async function fetchRoomList(origin: string = globalThis.location?.origin ?? ''): Promise<RoomListing[]> {
+  const res = await fetch(`${origin}/api/rooms`);
+  if (!res.ok) throw new Error(`room list failed: ${res.status}`);
+  return parseRoomsResponse(await res.json());
 }

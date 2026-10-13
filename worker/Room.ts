@@ -20,9 +20,12 @@ import {
   sanitizeMatchConfig,
   PROTOCOL_VERSION,
 } from '../src/net/protocol';
+import {listingFor, HEARTBEAT_MS} from '../src/net/roomList';
 
 interface Env {
   ROOM: DurableObjectNamespace;
+  /** The open-room list. Optional so a Room still runs (unlisted) where it isn't bound, e.g. in tests. */
+  LOBBY?: DurableObjectNamespace;
 }
 
 interface StoredPlayer {
@@ -102,11 +105,11 @@ interface Attachment {
 }
 
 const DEFAULT_SETTINGS: RoomSettings = {
-  maxPlayers: 6,
+  maxPlayers: 2,
   minPlayers: 2,
   battles: 2,
   wind: 1,
-  mapSize: 2,
+  mapSize: 1,
   tanksPerTeam: 1,
   alternateTurns: false,
 };
@@ -149,7 +152,7 @@ function newSeed(): number {
 export class Room {
   constructor(
     private readonly ctx: DurableObjectState,
-    _env: Env,
+    private readonly env: Env,
   ) {}
 
   /** Per-socket inbound-message counters for the current 1s window (in-memory — a hibernated DO isn't
@@ -167,6 +170,50 @@ export class Room {
     }
     r.n++;
     return r.n > SERVER_MAX_MSG_PER_SEC;
+  }
+
+  /** The last listing JSON the Lobby ACCEPTED (null = it accepted a removal, undefined = nothing accepted
+   *  yet, or the last attempt failed so the next publish must go out). In-memory: a woken DO just
+   *  republishes once, which is harmless. */
+  private m_lastListing: string | null | undefined = undefined;
+
+  /**
+   * Tell the Lobby whether this room is open to join from the list: upsert while it is listable, remove
+   * once it is not. Skips identical repeats unless `force` (the heartbeat). In the lobby phase the
+   * heartbeat alarm stays armed while anyone is connected — even when the room is full or a publish
+   * failed, so the next beat retries — and is cleared when the room is empty; in any other phase the
+   * alarm belongs to the AFK turn deadline and is left alone. A Lobby failure never touches gameplay.
+   *
+   * The alarm is set BEFORE the Lobby request on purpose: storage calls run under the input gate, so
+   * `s.phase` is still current there, but during the cross-object fetch other messages (a host's Start)
+   * run, and an alarm write after it would act on a stale phase and clobber the turn alarm.
+   */
+  private async publishListing(s: RoomState, force = false): Promise<void> {
+    const listing = listingFor(s);
+    const next = listing ? JSON.stringify(listing) : null;
+    if (!force && next === this.m_lastListing) return;
+    if (s.phase === 'lobby') {
+      const anyone = Object.values(s.players).some(p => p.connected && !p.spectator);
+      if (anyone) await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_MS);
+      else await this.ctx.storage.deleteAlarm();
+    }
+    const lobby = this.env.LOBBY;
+    if (!lobby) {
+      this.m_lastListing = next;
+      return;
+    }
+    try {
+      const res = await lobby.get(lobby.idFromName('global')).fetch(
+        new Request(`https://do/${listing ? 'upsert' : 'remove'}`, {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: next ?? JSON.stringify({code: s.code}),
+        }),
+      );
+      this.m_lastListing = res.ok ? next : undefined;
+    } catch {
+      this.m_lastListing = undefined; // the list is a convenience; retry on the next beat, never break the room
+    }
   }
 
   // ── HTTP: the WebSocket upgrade ────────────────────────────────────────────
@@ -355,6 +402,7 @@ export class Room {
         await this.save(s);
         this.send(ws, this.welcomeFor(s, existing));
         this.broadcast({t: 'roster', players: Room.publicPlayers(s)});
+        if (s.phase === 'lobby') await this.publishListing(s);
         // Resume an in-progress (or finished) match: reboot from the seed, apply the
         // latest authoritative state, then hand them the current turn / final result.
         this.resumeMatch(ws, s);
@@ -424,6 +472,7 @@ export class Room {
 
     this.send(ws, this.welcomeFor(s, player));
     this.broadcast({t: 'roster', players: Room.publicPlayers(s)}, ws);
+    await this.publishListing(s);
   }
 
   /** Replay the match to one (re)joining socket: boot → latest state → turn/result. */
@@ -484,6 +533,7 @@ export class Room {
     s.settings = next;
     await this.save(s);
     this.broadcast({t: 'settings', settings: next});
+    if (s.phase === 'lobby') await this.publishListing(s);
   }
 
   /** Host publishes its gameplay config to the lobby (sanitized) so joiners can see the match
@@ -541,6 +591,10 @@ export class Room {
     s.alternateTurns = !!s.settings.alternateTurns; // interleave teams vs contiguous squads
     const deadline = await this.armTurn(s); // start the AFK backstop for the first turn
     await this.save(s);
+    roomLog(
+      s.code,
+      `match started: players=${s.order.length} tanksPerTeam=${s.tanksPerTeam} view=${s.viewW}x${s.viewH} firstTurnIdx=${s.turnIdx} gen=${s.turnGen}`,
+    );
 
     this.broadcast(Room.startGameMsg(s));
     this.broadcast({
@@ -549,6 +603,7 @@ export class Room {
       deadline,
       turnGen: s.turnGen,
     });
+    await this.publishListing(s); // the match is underway → off the list (the turn alarm stays armed)
   }
 
   /** Total tanks in play = one squad per player. Turns cycle over POSITIONS [0, total). */
@@ -585,12 +640,17 @@ export class Room {
 
   private onCmd(s: RoomState, pid: number, msg: Extract<ClientMessage, {t: 'cmd'}>): void {
     if (s.phase !== 'playing' || Room.ownerOf(s, s.turnIdx) !== pid) {
+      roomLog(
+        s.code,
+        `cmd ${msg.cmd?.t} ignored from=${pid}: not their turn (a late one is routine) (phase=${s.phase} turnIdx=${s.turnIdx} owner=${Room.ownerOf(s, s.turnIdx)} gen=${s.turnGen})`,
+      );
       this.replyError(pid, 'not_your_turn', 'not your turn');
       return;
     }
     // Validate the command shape before relaying — a malformed cmd (null, unknown type, non-finite
     // index/coords) would crash or NaN-corrupt every peer's applyCommand.
     if (!isValidGameCommand(msg.cmd)) {
+      roomLog(s.code, `cmd REJECTED from=${pid}: invalid command ${JSON.stringify(msg.cmd)?.slice(0, 120)}`, true);
       this.replyError(pid, 'bad_message', 'invalid command');
       return;
     }
@@ -600,6 +660,10 @@ export class Room {
 
   private async onShotResult(s: RoomState, pid: number, msg: Extract<ClientMessage, {t: 'shotResult'}>): Promise<void> {
     if (s.phase !== 'playing' || Room.ownerOf(s, s.turnIdx) !== pid) {
+      roomLog(
+        s.code,
+        `shotResult ignored from=${pid}: not their turn (a late duplicate is routine) (phase=${s.phase} turnIdx=${s.turnIdx} owner=${Room.ownerOf(s, s.turnIdx)} gen=${s.turnGen})`,
+      );
       this.replyError(pid, 'not_your_turn', 'not your turn');
       return;
     }
@@ -611,16 +675,26 @@ export class Room {
     // contiguous squad) skip tank-1's turn and double the hand-off income, or advance the battle twice
     // after `over`. Silent drop for a stale gen — not an error; a missing gen is a malformed message.
     if (typeof msg.turnGen !== 'number') {
+      roomLog(s.code, `shotResult REJECTED from=${pid}: no turnGen`, true);
       this.replyError(pid, 'bad_message', 'missing turn generation');
       return;
     }
-    if (msg.turnGen !== s.turnGen) return;
+    if (msg.turnGen !== s.turnGen) {
+      roomLog(s.code, `shotResult DROPPED from=${pid}: stale turnGen ${msg.turnGen} (live ${s.turnGen})`);
+      return;
+    }
     // Validate the authoritative result STRUCTURALLY before persisting/broadcasting it. A malformed
     // result (null/short tank array, non-finite fields, bad heightmap) would otherwise be stored as
     // the room snapshot and crash — or NaN-corrupt — every client that later bootstraps from it (a
     // reconnect or a new spectator), permanently bricking the room across DO hibernation. Reject it;
     // the turn stays put and the AFK alarm forfeits it if the actor never sends a valid result.
     if (!isValidShotResult(msg.result, Room.totalTanks(s))) {
+      const tanks = (msg.result as {tanks?: unknown[]} | null)?.tanks;
+      roomLog(
+        s.code,
+        `shotResult REJECTED from=${pid}: invalid result (tanks=${Array.isArray(tanks) ? tanks.length : '?'}, expected ${Room.totalTanks(s)})`,
+        true,
+      );
       this.replyError(pid, 'bad_message', 'invalid shot result');
       return;
     }
@@ -629,6 +703,11 @@ export class Room {
     // on any client that bootstraps from it).
     if (s.expectedColumns === 0) s.expectedColumns = msg.result.heights.length;
     else if (msg.result.heights.length !== s.expectedColumns) {
+      roomLog(
+        s.code,
+        `shotResult REJECTED from=${pid}: heightmap width ${msg.result.heights.length} != ${s.expectedColumns}`,
+        true,
+      );
       this.replyError(pid, 'bad_message', 'heightmap width changed');
       return;
     }
@@ -663,6 +742,10 @@ export class Room {
         s.turnIdx = this.firstLivingTurn(s);
         const nbDeadline = await this.armTurn(s); // fresh battle → arm the first turn's backstop
         await this.save(s);
+        roomLog(
+          s.code,
+          `battle over (claimed by ${pid}) -> battle ${s.currentBattle}/${s.totalBattles} starts, turnIdx=${s.turnIdx} newGen=${s.turnGen}`,
+        );
         // Clients show the battle-winner celebration, then advance on this message; the turn
         // hand-off is queued behind that intermission (see NetGame). Order is unchanged.
         this.broadcast({t: 'nextBattle', battle: s.currentBattle, seed: s.seed});
@@ -678,6 +761,7 @@ export class Room {
       s.phase = 'ended';
       await this.disarmTurn(s); // no more turns → cancel the AFK backstop
       await this.save(s);
+      roomLog(s.code, `war over after battle ${s.currentBattle}/${s.totalBattles} (claimed by ${pid}) -> gameOver`);
       this.broadcast({t: 'gameOver'});
       return;
     }
@@ -687,6 +771,10 @@ export class Room {
     const roundWrapped = s.turnIdx <= prevIdx; // advanced past the last player → a round completed
     const deadline = await this.armTurn(s); // reset the AFK backstop for the new turn
     await this.save(s);
+    roomLog(
+      s.code,
+      `shotResult OK from=${pid} gen=${msg.turnGen} -> turnIdx ${prevIdx}->${s.turnIdx} newGen=${s.turnGen}`,
+    );
     // handoff:true → this turn follows a shot, so clients run the once-per-turn effects (crate
     // roll + income). The match/battle's first turnBegin (onStart/nextBattle) omits it.
     this.broadcast({
@@ -758,6 +846,10 @@ export class Room {
    */
   async alarm(): Promise<void> {
     const s = await this.load();
+    if (s.phase === 'lobby') {
+      await this.publishListing(s, true); // heartbeat: keep the listing fresh and re-arm
+      return;
+    }
     if (s.phase !== 'playing' || !s.turnDeadline) return; // not in a live turn → nothing to forfeit
     if (Date.now() < s.turnDeadline - 50) {
       await this.ctx.storage.setAlarm(s.turnDeadline); // a later turn moved it out → re-arm, don't forfeit
@@ -768,6 +860,7 @@ export class Room {
     const roundWrapped = s.turnIdx <= prevIdx; // advanced past the last player → a round completed
     const deadline = await this.armTurn(s);
     await this.save(s);
+    roomLog(s.code, `AFK deadline: turn ${prevIdx} forfeited -> turnIdx ${s.turnIdx} newGen=${s.turnGen}`, true);
     // handoff:true → the forfeited turn still passes, so clients run per-turn income + the crate roll
     // (deterministic on every client). roundWrapped awards per-round income when the order wraps.
     this.broadcast({
@@ -846,6 +939,11 @@ export class Room {
     const p = s.players[pid];
     if (!p) return;
     if (!removeSlot && !p.connected) return; // already dropped (e.g. leave → ws.close double-fires)
+    roomLog(
+      s.code,
+      `player ${pid} (${p.name}) disconnected (phase=${s.phase} removeSlot=${removeSlot})`,
+      s.phase === 'playing',
+    );
     // Did the departing player hold the current turn? (Check before mutating the roster.)
     const wasActive = s.phase === 'playing' && Room.ownerOf(s, s.turnIdx) === pid;
     if (removeSlot) delete s.players[pid];
@@ -886,7 +984,13 @@ export class Room {
     }
     await this.save(s);
     this.broadcast({t: 'roster', players: Room.publicPlayers(s)});
+    if (s.phase === 'lobby') await this.publishListing(s);
   }
+}
+
+/** One server-side diagnostic line per turn-flow decision, so a stalled match can be read from the terminal. */
+function roomLog(code: string, text: string, warn = false): void {
+  (warn ? console.warn : console.log)(`[room ${code}] ${text}`);
 }
 
 function clampInt(n: number, lo: number, hi: number): number {

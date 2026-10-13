@@ -12,6 +12,7 @@ import type {RoomClient} from './roomClient';
 import type {ServerMessage, MatchConfig} from './protocol';
 import {applyCommand} from './commands';
 import {strings, fmt} from '../i18n';
+import {diag} from './netDiag';
 
 // ==========================================================================
 // INTERFACES & TYPES
@@ -71,6 +72,8 @@ export class NetGame {
   // diverge. A queue rather than a single slot because a stall (e.g. a backgrounded tab whose rAF
   // sim freezes while messages keep arriving) can leave several turns waiting at once.
   private m_queue: QueuedEvent[] = [];
+  private m_settleLoggedGen = -1; // the turn whose settle was last logged (see onTurnSettled)
+  private m_settleRepeats = 0;
   private m_turnGen = 0; // the current turn's server generation (from turnBegin) — echoed in shotResult
   private m_intermissionTimer: ReturnType<typeof setTimeout> | null = null; // between-battle advance
   // True once we've begun playing turns in lockstep (first turnBegin). While FALSE we have no
@@ -138,9 +141,12 @@ export class NetGame {
    * can't apply a later turn's command to the current tank or skip an intervening turn's effects.
    */
   private dispatch(ev: QueuedEvent): void {
-    if (this.m_queue.length > 0 || this.host.controller.isNetSimBusy()) {
+    const busy = this.host.controller.isNetSimBusy();
+    if (this.m_queue.length > 0 || busy) {
       this.m_queue.push(ev);
+      diag('queue', `${ev.t} QUEUED (len=${this.m_queue.length} busy=${busy})`);
     } else {
+      diag('queue', `${ev.t} run now`);
       this.runEvent(ev);
     }
   }
@@ -161,6 +167,9 @@ export class NetGame {
   /** Drain queued events in order, stopping the moment one makes the sim busy again (a relayed fire) —
    *  the settle callback resumes the drain. So each pass applies exactly one turn's worth of events. */
   private drainQueue(): void {
+    if (this.m_queue.length > 0) {
+      diag('queue', `drain start len=${this.m_queue.length} busy=${this.host.controller.isNetSimBusy()}`);
+    }
     while (this.m_queue.length > 0 && !this.host.controller.isNetSimBusy()) {
       this.runEvent(this.m_queue.shift()!);
     }
@@ -171,6 +180,7 @@ export class NetGame {
   // ========================================================================
 
   private applyTurn(playerIdx: number, handoff: boolean, roundWrapped: boolean, turnGen: number): void {
+    diag('turn', `applyTurn idx=${playerIdx} gen=${turnGen} handoff=${handoff} wrapped=${roundWrapped}`);
     this.m_turnGen = turnGen; // remember this turn's generation so our shotResult echoes it (idempotency)
     // NOTE: m_hasSimulated is flipped in onTurnSettled (after we actually simulate a turn), NOT here.
     // A client that reconnects/joins DURING a shot's flight misses the already-broadcast fire cmd, so
@@ -204,7 +214,10 @@ export class NetGame {
     // (otherwise an honest client false-flags divergence whenever a crate is mid-descent).
     gc.reconcileNetCrates(result);
     const localHash = gc.stateHash();
-    if (localHash !== hash) this.host.onDivergence?.({localHash, keyframeHash: hash});
+    if (localHash !== hash) {
+      diag('DESYNC', `local=${localHash} keyframe=${hash}`);
+      this.host.onDivergence?.({localHash, keyframeHash: hash});
+    }
   }
 
   // ========================================================================
@@ -273,6 +286,18 @@ export class NetGame {
     // and keyframes become detect-only (the anti-cheat). Set here, not on turnBegin, so a mid-shot
     // reconnect (which never simulated the in-flight shot) stays in bootstrap and adopts its result.
     this.m_hasSimulated = true;
+    // endTurn re-fires every sim step until the server's next turnBegin arrives, so log the first settle of
+    // a turn and count the rest (a stalled turn would otherwise flood the ring and push the evidence out).
+    if (this.m_settleLoggedGen !== this.m_turnGen) {
+      this.m_settleLoggedGen = this.m_turnGen;
+      this.m_settleRepeats = 0;
+      diag(
+        'settle',
+        `sim settled local=${gc.isLocalNetTurn()} battleOver=${gc.isNetBattleOver()} queue=${this.m_queue.length}`,
+      );
+    } else if (++this.m_settleRepeats === 1 || this.m_settleRepeats % 50 === 0) {
+      diag('settle', `settled again (x${this.m_settleRepeats + 1}) - the server has not moved the turn on yet`);
+    }
     if (gc.isLocalNetTurn()) {
       this.client.send({
         t: 'shotResult',
@@ -303,13 +328,21 @@ export class NetGame {
     // Drop the ended battle's queued events (its final stateUpdate) — reconciling them against the
     // regenerated battle would flag a bogus divergence. The new battle's turnBegin arrives AFTER this
     // message (server order) and re-queues behind the BattleEnd "busy" gate, then drains below.
+    diag(
+      'battle',
+      `nextBattle received: dropping ${this.m_queue.length} queued event(s), advancing in ${NET_BATTLE_INTERMISSION_MS}ms`,
+    );
     this.m_queue = [];
     this.cancelIntermission();
     this.m_intermissionTimer = setTimeout(() => {
       this.m_intermissionTimer = null;
       const gc = this.host.controller;
-      if (!gc.isNetBattleActive()) return; // left the match during the intermission
+      if (!gc.isNetBattleActive()) {
+        diag('battle', 'intermission over but the match is no longer active - not advancing');
+        return; // left the match during the intermission
+      }
       gc.netNextBattle(seed);
+      diag('battle', `intermission over, advanced; queue=${this.m_queue.length} busy=${gc.isNetSimBusy()}`);
       this.drainQueue(); // apply the new battle's first turnBegin (queued behind BattleEnd)
     }, NET_BATTLE_INTERMISSION_MS);
   }

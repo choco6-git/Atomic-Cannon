@@ -46,10 +46,12 @@ after **Start**, play a synced match.
 | `ROOM` (Durable Object, SQLite)      | one instance per room code; roster, turn arbiter, latest snapshot  |
 | `STATS` (Durable Object, SQLite)     | ONE global instance; aggregate play counters + per-country tally   |
 | `PROFILE` (Durable Object, SQLite)   | one instance per profile id; that player's synced settings/scores  |
+| `LOBBY` (Durable Object, SQLite)     | ONE global instance; open-room list (listings expire after 60 s)   |
 | `ASSETS` (dist/)                     | the static client, with SPA fallback to `index.html`               |
 | `ROOM_LIMIT` (Rate Limit, 30/60s)    | per-IP cap on `/api/new` room creation                             |
 | `STATS_LIMIT` (Rate Limit, 20/60s)   | per-IP cap on `/api/stats` uploads                                 |
 | `PROFILE_LIMIT` (Rate Limit, 30/60s) | per-IP cap on all of `/api/profile*` — reads included              |
+| `LOBBY_LIMIT` (Rate Limit, 240/60s)  | per-IP cap on `/api/rooms` polling (~15/min per open tab)          |
 
 Server-side guards already in place: version check on join, per-room `maxPlayers`,
 turn-ownership validation, a 128 KB frame-size cap, and the room-creation rate limit.

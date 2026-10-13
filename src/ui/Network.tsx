@@ -4,7 +4,7 @@
  * (roster + ready + host Start), an error card, and a leave-only panel once the
  * match is playing (from then on the battle HUD is what's on screen).
  */
-import {useState} from 'preact/hooks';
+import {useEffect, useState} from 'preact/hooks';
 import {strings, fmt} from '../i18n';
 import {BmpText} from './BmpText';
 import {BigButton} from './BigButton';
@@ -13,8 +13,12 @@ import {Modal} from './Modal';
 import {CodeDisplay} from './CodeDisplay';
 import {goToMenu, uiMenuBack} from './store';
 import {formatRoomCode, formatCodeInput} from '../net/roomCode';
+import {isJoinable, type RoomListing} from '../net/roomList';
 import {
   netState,
+  roomList,
+  startRoomPolling,
+  stopRoomPolling,
   playerName,
   setPlayerName,
   createRoom,
@@ -37,6 +41,45 @@ function toMenu(): void {
   uiMenuBack(); // match the other screens' "back to menu" whirr
 }
 
+function RoomRow({room}: {room: RoomListing}) {
+  const n = strings.value.net;
+  const open = isJoinable(room, __APP_VERSION__);
+  return (
+    <button
+      type="button"
+      class={open ? 'net-room' : 'net-room net-room-off'}
+      disabled={!open}
+      onClick={() => joinRoom(room.code)}
+    >
+      <BmpText font="beijing-16-out" text={room.hostName || '?'} spacing={-1} />
+      <BmpText font="beijing-16-out" text={`${room.players}/${room.maxPlayers}`} spacing={-1} />
+      <BmpText font="beijing-16-out" text={fmt(n.roomList.map, {n: room.mapSize})} spacing={-1} />
+      {!open && <BmpText font="beijing-16-out" text={n.roomList.mismatch} spacing={-1} />}
+    </button>
+  );
+}
+
+/** Rooms open to join, polled while the entry screen is up. Clicking one joins it by its code. */
+function RoomList() {
+  const n = strings.value.net.roomList;
+  const {rooms, status} = roomList.value;
+  useEffect(() => {
+    startRoomPolling();
+    return stopRoomPolling;
+  }, []);
+  return (
+    <div class="net-rooms">
+      <BmpText font="beijing-16-out" text={n.title} spacing={-1} />
+      {status === 'offline' && <BmpText font="beijing-16-out" text={n.offline} spacing={-1} />}
+      {rooms.map(r => (
+        <RoomRow key={r.code} room={r} />
+      ))}
+      {!rooms.length && status === 'loading' && <BmpText font="beijing-16-out" text={n.loading} spacing={-1} />}
+      {!rooms.length && status === 'ok' && <BmpText font="beijing-16-out" text={n.empty} spacing={-1} />}
+    </div>
+  );
+}
+
 function Entry() {
   const n = strings.value.net;
   const [code, setCode] = useState('');
@@ -56,6 +99,10 @@ function Entry() {
       </div>
 
       <BigButton label={n.create} onClick={createRoom} />
+
+      <div class="net-divider" />
+
+      <RoomList />
 
       <div class="net-divider" />
 

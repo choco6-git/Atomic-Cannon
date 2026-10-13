@@ -91,6 +91,7 @@ import {clamp, clamp01, deg2rad, rad2deg, TWO_PI, wrapIndex} from '../math/num';
 import {Prng} from '../math/prng';
 import type {GameCommand} from '../net/commands';
 import type {MatchConfig} from '../net/protocol';
+import {diag, newWatch, watchTick} from '../net/netDiag';
 import {
   EXT,
   isBeamExt,
@@ -931,6 +932,19 @@ export class CGameController implements ShotWorld {
   }
 
   update(dt: number): void {
+    if (this.m_netMode) {
+      watchTick(
+        this.m_netWatch,
+        {
+          state: this.m_gameState,
+          resolving: this.m_netShotResolving,
+          current: this.m_currentPlayerIndex,
+          turnSeq: this.m_turnSeq,
+          detail: () => this.netDiagDetail(),
+        },
+        performance.now(),
+      );
+    }
     switch (this.m_gameState) {
       case EGameState.Battle:
         this.updateBattle(dt);
@@ -2796,13 +2810,19 @@ export class CGameController implements ShotWorld {
     // stops, so anything dropped beyond it would shoot from cover no opponent can find. Refuse
     // the deploy outright — the round is spent for nothing, which is the honest outcome of
     // firing a turret off the map.
-    if (x < SENTRY.EDGE_MARGIN || x > this.m_land.width - SENTRY.EDGE_MARGIN) return;
+    if (x < SENTRY.EDGE_MARGIN || x > this.m_land.width - SENTRY.EDGE_MARGIN) {
+      diag('sentry', `deploy refused: x=${Math.round(x)} is inside the ${SENTRY.EDGE_MARGIN}px world-edge margin`);
+      return;
+    }
     const team = owner ? owner.getTeamId() : 0;
     // Never grow the field without bound — but count only THIS player's own turrets, so the
     // allowance is identical for everyone whether the match has 2 players or 16.
     let deployed = 0;
     for (const t of this.m_tanks) if (t.isSentry() && t.getTeamId() === team) deployed++;
-    if (deployed >= SENTRY.MAX_PER_PLAYER) return;
+    if (deployed >= SENTRY.MAX_PER_PLAYER) {
+      diag('sentry', `deploy refused: team ${team} already holds ${deployed}`);
+      return;
+    }
     const w = getWeapon(weaponIndex);
     const minigun = w.getId() === 'sentry.minigun';
     // The badge shows the OWNER's name (a sentry inherits its deployer's display name);
@@ -2819,6 +2839,7 @@ export class CGameController implements ShotWorld {
     sentry.setMaxLife(w.getDamage());
     if (minigun) this.m_sentryMinigun.add(sentry); // → fires "Machine Gun" on its turn
     this.m_tanks.push(sentry);
+    diag('sentry', `deployed x=${Math.round(x)} team=${team} tanks=${this.m_tanks.length}`);
     // Preload the Sentry hull/turret/wreck sprites — the startGame preload ran before this
     // tank existed, so without this the renderer would stay on the vector-hull fallback.
     for (const s of sentry.getRequiredSprites()) {
@@ -3221,6 +3242,7 @@ export class CGameController implements ShotWorld {
     this.m_turnForfeited = false; // fresh turn: the passive-death forfeit latch is re-armed
     this.m_aim.active = false; // disown any aim drag held from the PREVIOUS turn
     this.m_turnSeq++;
+    this.m_netSentryQueue = null; // a fresh turn: its turret round has not run yet
     const tank = this.getCurrentTank();
     // Buy Time → Automatic: the human's arsenal is auto-assigned (no manual depot). Top it up
     // on the human's turn-begin from whatever credits are on hand (a no-op when broke). In net,
@@ -3353,7 +3375,15 @@ export class CGameController implements ShotWorld {
    *  (cumulative war stats + credits kept), turn order reset. No-op once the war is over (the
    *  caller exits to the menu instead). */
   nextBattle(): void {
-    if (this.getWarOver()) return;
+    if (this.getWarOver()) {
+      if (this.m_netMode) {
+        diag(
+          'battle',
+          `nextBattle is a NO-OP: war already over locally (gameType=${this.m_gameType} battle ${this.m_currentBattle}/${this.m_totalBattles})`,
+        );
+      }
+      return;
+    }
     this.m_currentBattle++;
     this.m_currentRound = 1; // the round counter resets each battle (round-1 forced-aim keys off it)
     this.m_shots = [];
@@ -3425,6 +3455,49 @@ export class CGameController implements ShotWorld {
    *     a squad ends it when every enemy team is wiped, not only on the last tank.
    *   • Rounds/Points never ends early on eliminations; it plays the full round count and
    *     scores by points. A total wipeout (no team left) still ends any mode. */
+  /**
+   * NETWORK: let the finished turn's owner's Sentries take their shots before the turn is reported.
+   *
+   * The server hands turns to PLAYERS only, so a deployed Sentry never became the current tank and never
+   * fired (in solo play it gets its own turn at the tail of the order). Instead, every client — the actor
+   * and every spectator alike — runs the owner's living turrets one after another once the owner's own
+   * shot has settled. A turret's aim (nearest enemy) and shot are deterministic, so nothing is relayed,
+   * and the turn stays "resolving" throughout, so the server's next events wait in the bridge's queue.
+   * Called from every `endTurn` in a net match (which re-fires each sim step until the hand-off arrives);
+   * returns true while a turret is firing or about to, false once the owner's turrets are done — with the
+   * owner restored as the current tank so the turn is reported as the owner's.
+   */
+  private netSentryRound(): boolean {
+    if (this.m_netSentryQueue === null) {
+      const owner = this.getCurrentTank();
+      if (!owner || owner.isSentry()) return false; // a turret's own shot never starts another round
+      this.m_netSentryOwner = this.m_currentPlayerIndex;
+      this.m_netSentryQueue = this.m_tanks.filter(
+        t => t.isSentry() && t.isAlive() && t.getTeamId() === owner.getTeamId(),
+      );
+      diag('sentry', `owner's turn settled: ${this.m_netSentryQueue.length} turret(s) to fire`);
+    }
+    const next = this.m_netSentryQueue.shift();
+    if (!next) {
+      if (this.m_netSentryOwner >= 0) this.m_currentPlayerIndex = this.m_netSentryOwner;
+      return false;
+    }
+    diag(
+      'sentry',
+      `turret ${this.m_tanks.indexOf(next)} takes its shot (${this.m_netSentryQueue.length} left after it)`,
+    );
+    this.m_currentPlayerIndex = this.m_tanks.indexOf(next);
+    this.m_gameState = EGameState.Battle;
+    this.m_netShotResolving = true; // still resolving: hold the server's hand-off until the last turret is done
+    this.schedule(0.6, () => {
+      if (!next.isAlive())
+        this.endTurn(); // lost in the meantime: move on to the next turret
+      else this.executeSentryTurn();
+    });
+    this.markDirty();
+    return true;
+  }
+
   private endTurn(): void {
     // The battle is already over — a stale scheduled closure (a settled Move poll, a bot/sentry with
     // no target) must not re-enter finishBattle and restart the winner animation / replay the jingle.
@@ -3438,7 +3511,12 @@ export class CGameController implements ShotWorld {
     // deterministic turn-hand-off effects (crate roll, income) are driven ONCE by the server's
     // hand-off turnBegin instead; see netTurnHandoff / netAwardRoundCredit.)
     if (this.m_netMode) {
+      if (this.netSentryRound()) return; // a turret of this player's team is taking its shot first
       this.m_netShotResolving = false;
+      if (this.m_endTurnLoggedSeq !== this.m_turnSeq) {
+        this.m_endTurnLoggedSeq = this.m_turnSeq; // endTurn re-fires every sim step until the next hand-off
+        diag('endTurn', `net turn settled (state=${this.m_gameState}) -> reporting to the bridge`);
+      }
       this.m_onNetTurnEnd?.();
       return;
     }
@@ -3721,6 +3799,13 @@ export class CGameController implements ShotWorld {
 
   /** Fire currently selected weapon from current player. */
   fire(): void {
+    if (this.m_netMode) {
+      diag(
+        'fire',
+        `enter local=${this.isLocalNetTurn()} paused=${this.m_paused} state=${this.m_gameState} ` +
+          `current=${this.m_currentPlayerIndex} weapon=${getWeapon(this.m_currentWeaponIndex).getId()}`,
+      );
+    }
     if (this.m_paused) return; // debug freeze rejects all input
     // The battle is over (standings showing) — a bot/sentry fire() queued before the last enemy died
     // passively must not launch a live shot onto the finished battle. Human input is already gated by
@@ -3749,7 +3834,10 @@ export class CGameController implements ShotWorld {
 
     // Network: this turn's action is now resolving — hold the next hand-off until it
     // settles (both the acting client and every simulating spectator set this).
-    if (this.m_netMode) this.m_netShotResolving = true;
+    if (this.m_netMode) {
+      this.m_netShotResolving = true;
+      diag('fire', 'launched: resolving=true until endTurn');
+    }
 
     // Ammo: never fire a weapon that's out of stock — if the selected one was emptied or sold
     // off, fall back to the unlimited staple. In a NET match only the ACTING client charges
@@ -5311,6 +5399,22 @@ export class CGameController implements ShotWorld {
     return this.m_netShotResolving || (this.m_netMode && this.m_gameState === EGameState.BattleEnd);
   }
 
+  /** One line of everything that decides whether a net shot can settle, for the diagnostic log. */
+  private netDiagDetail(): string {
+    const tanks = this.m_tanks
+      .map((t, i) => {
+        const kind = t.isSentry() ? 'S' : t.isHuman() ? 'H' : 'B';
+        const p = t.getPosition();
+        return `${i}${kind}${t.isAlive() ? '' : 'x'}${t.isFalling() ? 'F' : ''}${t.isMoving() ? 'M' : ''}@${Math.round(p.x)},${Math.round(p.y)}`;
+      })
+      .join(' ');
+    return (
+      `state=${this.m_gameState} current=${this.m_currentPlayerIndex} me=${this.m_netLocalIndex} ` +
+      `resolving=${this.m_netShotResolving} paused=${this.m_paused} blast=${this.m_particles.hasActiveBlast()} ` +
+      `shake=${this.m_camera.isShaking()} settling=${this.m_land.isSettling()} tanks=[${tanks}]`
+    );
+  }
+
   /** True while a net match is running (used to guard a deferred between-battle advance). */
   isNetBattleActive(): boolean {
     return this.m_netMode;
@@ -5408,9 +5512,16 @@ export class CGameController implements ShotWorld {
     this.beginTurn();
   }
 
-  /** Authoritative post-turn state the acting client broadcasts (tanks + terrain + wind). */
+  /** Authoritative post-turn state the acting client broadcasts (tanks + terrain + wind).
+   *
+   *  The tank rows are the PLAYERS' tanks only. A deployed Sentry lives in the same `m_tanks` array (after
+   *  the players), but the server arbitrates turns over players x squad size and rejects any shotResult
+   *  whose row count differs — one turret on the field would otherwise get every later result refused, so
+   *  the turn never advanced and both sides waited on each other. Every client simulates the turret
+   *  itself from the same shots, so it is never adopted from a snapshot. */
   getNetSnapshot(): NetSnapshot {
-    const tanks = this.m_tanks.map(t => {
+    const playerTanks = this.m_tanks.filter(t => !t.isSentry());
+    const tanks = playerTanks.map(t => {
       const h = t.getHealth();
       const p = t.getPosition();
       return {
@@ -5435,7 +5546,7 @@ export class CGameController implements ShotWorld {
         y: m.y,
         armed: m.armed,
         weaponIndex: m.weaponIndex,
-        ownerIdx: m.owner ? this.m_tanks.indexOf(m.owner) : -1,
+        ownerIdx: m.owner ? playerTanks.indexOf(m.owner) : -1, // a turret-laid mine reads as ownerless
       })),
       // Supply crates — authoritative so a reconnecting/keyframe client reproduces a crate already on
       // the field (else it'd miss the drop, then diverge when a health crate is picked up). id/phase
@@ -6229,6 +6340,13 @@ export class CGameController implements ShotWorld {
   // the server's next `turnBegin` until this clears, so a late hand-off can't interrupt
   // an in-flight local simulation.
   private m_netShotResolving = false;
+  /** Stall-watchdog memory for the network diagnostic log (see net/netDiag). */
+  private m_netWatch = newWatch();
+  private m_endTurnLoggedSeq = -1;
+  /** The turrets still to fire at the end of this net turn (null = the turn's turret round hasn't started). */
+  private m_netSentryQueue: CTank[] | null = null;
+  /** Tank index of the player whose turn the turret round belongs to. */
+  private m_netSentryOwner = -1;
   // Fixed LOGICAL view/world dimensions (px), decoupled from the render canvas. The sim
   // works in these; draw() scales them to the live native canvas so a resize stays crisp
   // and never regenerates the world. Set in startGame (solo = boot size, net = constant).

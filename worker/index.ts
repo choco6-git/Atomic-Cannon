@@ -14,11 +14,13 @@ import {json, JSON_TYPE, rateLimit} from './http';
 export {Room} from './Room';
 export {Stats} from './Stats';
 export {Profile} from './Profile';
+export {Lobby} from './Lobby';
 
 interface Env {
   ROOM: DurableObjectNamespace;
   STATS: DurableObjectNamespace;
   PROFILE: DurableObjectNamespace;
+  LOBBY: DurableObjectNamespace;
   ASSETS: Fetcher;
   /** Per-IP limiter on room creation (see `ratelimits` in wrangler.jsonc). */
   ROOM_LIMIT: RateLimit;
@@ -26,10 +28,15 @@ interface Env {
   STATS_LIMIT: RateLimit;
   /** Per-IP limiter on profile reads/writes — also what makes guessing ids hopeless in practice. */
   PROFILE_LIMIT: RateLimit;
+  /** Per-IP limiter on the open-room list (clients poll it every few seconds, one tab = ~15/min). */
+  LOBBY_LIMIT: RateLimit;
 }
 
 /** The single global Stats DO instance. */
 const statsStub = (env: Env) => env.STATS.get(env.STATS.idFromName('global'));
+
+/** The single global Lobby DO — the list of rooms open to join. */
+const lobbyStub = (env: Env) => env.LOBBY.get(env.LOBBY.idFromName('global'));
 
 /** The Profile DO named by a profile id — the id IS the instance name. */
 const profileStub = (env: Env, code: string) => env.PROFILE.get(env.PROFILE.idFromName(code));
@@ -87,6 +94,20 @@ export default {
       const limited = await rateLimit(req, env.ROOM_LIMIT, 'slow down — too many rooms');
       if (limited) return limited;
       return json({code: newRoomCode()});
+    }
+
+    // Open rooms for the network screen's list. Clients poll this every few seconds, so it is rate-limited
+    // per IP (the ceiling leaves room for several tabs behind one shared address). `max-age=2` lets the
+    // BROWSER reuse a response briefly; it is not an edge cache, so every client's poll reaches the Lobby.
+    if (url.pathname === '/api/rooms') {
+      if (req.method !== 'GET') return json({error: 'method not allowed'}, 405);
+      const limited = await rateLimit(req, env.LOBBY_LIMIT, 'slow down');
+      if (limited) return limited;
+      const res = await lobbyStub(env).fetch(new Request('https://do/list'));
+      return new Response(await res.text(), {
+        status: res.status,
+        headers: {'content-type': 'application/json', 'cache-control': 'public, max-age=2'},
+      });
     }
 
     // Global play stats. GET = the aggregate for the About screen (short-cached); POST = one finished

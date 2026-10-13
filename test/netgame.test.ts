@@ -9,13 +9,13 @@ import {makeCanvas} from './_dom';
 import {priv, netPriv} from './_internals';
 import {CGameController, EGameState} from '../src/game/CGameController';
 import {GameConfig} from '../src/core/CGameConfig';
-import {WEAPON_DATABASE, getWeapon} from '../src/core/CWeapon';
+import {WEAPON_DATABASE, getWeapon, weaponName} from '../src/core/CWeapon';
 import {EXT} from '../src/core/weapons/ExtType';
 import {CTank} from '../src/core/CTank';
 import {NetGame, type NetGameHost} from '../src/net/netGame';
 import {applyCommand, type GameCommand} from '../src/net/commands';
 import type {RoomClient, RoomClientState} from '../src/net/roomClient';
-import type {ClientMessage} from '../src/net/protocol';
+import {isValidShotResult, type ClientMessage} from '../src/net/protocol';
 
 const ROSTER = [
   {name: 'Ada', color: '#f00'},
@@ -1234,3 +1234,152 @@ function ng2(gc: CGameController): NetGame {
   } as unknown as RoomClient;
   return new NetGame(client, {controller: gc, onMatchStart: () => {}});
 }
+
+describe('a deployed sentry and the net snapshot', () => {
+  // A Sentry is pushed onto the same tank array as the players, but the server arbitrates turns over
+  // PLAYERS only and rejects any shotResult whose tank count differs from players x squad size. A
+  // snapshot that carried the turret therefore got every later shotResult refused: the turn never
+  // advanced and both players waited on each other.
+  const turretIndex = () => WEAPON_DATABASE.findIndex(w => weaponName(w) === 'Sentry Turret');
+
+  function withSentry(): CGameController {
+    const gc = netController(0);
+    const owner = priv(gc).m_tanks[0] as CTank;
+    gc.deploySentry(owner.getPosition().x + 40, 0, owner, turretIndex());
+    return gc;
+  }
+
+  it('the turret really is added to the shared tank array', () => {
+    const gc = withSentry();
+    expect(priv(gc).m_tanks.length).toBe(3);
+  });
+
+  it('the snapshot carries the players only, never the turret', () => {
+    const gc = withSentry();
+    expect(gc.getNetSnapshot().tanks).toHaveLength(2);
+  });
+
+  it('a snapshot taken with a turret on the field passes the server shot-result check', () => {
+    const gc = withSentry();
+    expect(isValidShotResult(gc.getNetSnapshot(), 2)).toBe(true);
+  });
+
+  it("the snapshot's tank rows still line up with the players, in order", () => {
+    const gc = withSentry();
+    const players = (priv(gc).m_tanks as CTank[]).slice(0, 2);
+    const rows = gc.getNetSnapshot().tanks;
+    expect(rows[0].x).toBe(players[0].getPosition().x);
+    expect(rows[1].x).toBe(players[1].getPosition().x);
+  });
+
+  it('applying a snapshot leaves a locally deployed turret untouched', () => {
+    const a = withSentry();
+    const b = withSentry();
+    const sentryBefore = (priv(b).m_tanks[2] as CTank).getPosition().x;
+    b.applyNetSnapshot(a.getNetSnapshot());
+    expect(priv(b).m_tanks).toHaveLength(3);
+    expect((priv(b).m_tanks[2] as CTank).getPosition().x).toBe(sentryBefore);
+  });
+});
+
+describe('a sentry takes its shot in a network match', () => {
+  // The server hands turns to PLAYERS only, so a deployed Sentry never became the current tank and never
+  // fired. Every client now runs its owner's turrets, in order, right after the owner's own shot settles -
+  // the aim and the shot are deterministic, so nothing is relayed - and only then is the turn reported.
+  const turretIndex = () => WEAPON_DATABASE.findIndex(w => weaponName(w) === 'Sentry Turret');
+  const START = {
+    t: 'startGame' as const,
+    seed: 999,
+    order: [1, 2],
+    wind: 1,
+    mapSize: 2,
+    battles: 2,
+    tanksPerTeam: 1,
+    currentBattle: 1,
+    viewW: 1280,
+    viewH: 720,
+    config: CFG,
+  };
+
+  function bridge(youId: number) {
+    const gc = new CGameController(makeCanvas());
+    const sent: ClientMessage[] = [];
+    const client = {
+      getState: () => ({
+        phase: 'playing',
+        youId,
+        players: [
+          {id: 1, name: 'Ada', color: '#f00', ready: true, connected: true, isHost: true},
+          {id: 2, name: 'Bo', color: '#0f0', ready: true, connected: true, isHost: false},
+        ],
+      }),
+      send: (m: ClientMessage) => void sent.push(m),
+    } as unknown as RoomClient;
+    const ng = new NetGame(client, {controller: gc, onMatchStart: () => {}});
+    ng.handle(START);
+    return {gc, ng, sent};
+  }
+
+  /** Run the sim at a steady 60 Hz with the wall clock stubbed to match (screen shake gates the hand-off
+   *  on the wall clock, so a sim running faster than real time would never settle). */
+  function runUntilReported(gc: CGameController, sent: ClientMessage[], maxTicks = 8000): void {
+    const realPerf = globalThis.performance;
+    let fakeNow = 1000;
+    (globalThis as {performance?: unknown}).performance = {now: () => fakeNow};
+    try {
+      for (let i = 0; i < maxTicks && !sent.some(m => m.t === 'shotResult'); i++) {
+        fakeNow += 1000 / 60;
+        gc.advance(1 / 60);
+      }
+    } finally {
+      (globalThis as {performance?: unknown}).performance = realPerf;
+    }
+  }
+
+  const fired = (gc: CGameController) => (gc as unknown as {m_stats: {weaponsFired: number}}).m_stats.weaponsFired;
+
+  it("the owner's turrets fire after the owner's shot, and only then is the turn reported", () => {
+    const {gc, sent} = bridge(1); // local index 0 = the owner
+    gc.netSetActivePlayer(0);
+    const owner = priv(gc).m_tanks[0] as CTank;
+    gc.deploySentry(owner.getPosition().x + 40, 0, owner, turretIndex());
+    const before = fired(gc);
+    priv(gc).endTurn(); // the owner's own shot has just settled
+    runUntilReported(gc, sent);
+    expect(sent.some(m => m.t === 'shotResult')).toBe(true);
+    expect(fired(gc) - before).toBe(1); // the turret's shot happened BEFORE the report
+    expect(gc.isLocalNetTurn()).toBe(true); // and it is reported as the owner's turn again
+    expect(priv(gc).m_tanks).toHaveLength(3);
+  });
+
+  it('a spectating client runs the same turret shot but reports nothing', () => {
+    const {gc, sent} = bridge(2); // local index 1; the owner is index 0
+    gc.netSetActivePlayer(0);
+    const owner = priv(gc).m_tanks[0] as CTank;
+    gc.deploySentry(owner.getPosition().x + 40, 0, owner, turretIndex());
+    const before = fired(gc);
+    priv(gc).endTurn();
+    runUntilReported(gc, sent, 1500);
+    expect(fired(gc) - before).toBe(1);
+    expect(sent.some(m => m.t === 'shotResult')).toBe(false);
+  });
+
+  it("an enemy's turret does not fire at the end of my turn", () => {
+    const {gc, sent} = bridge(1);
+    gc.netSetActivePlayer(0);
+    const enemy = priv(gc).m_tanks[1] as CTank;
+    gc.deploySentry(enemy.getPosition().x - 40, 0, enemy, turretIndex());
+    const before = fired(gc);
+    priv(gc).endTurn();
+    runUntilReported(gc, sent);
+    expect(sent.some(m => m.t === 'shotResult')).toBe(true);
+    expect(fired(gc) - before).toBe(0);
+  });
+
+  it('with no turret on the field the turn is reported at once, as before', () => {
+    const {gc, sent} = bridge(1);
+    gc.netSetActivePlayer(0);
+    priv(gc).endTurn();
+    expect(sent.some(m => m.t === 'shotResult')).toBe(true);
+  });
+});

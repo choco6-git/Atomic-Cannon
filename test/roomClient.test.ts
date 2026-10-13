@@ -325,4 +325,19 @@ describe('RoomClient', () => {
     expect(client.getState().phase).toBe('playing');
     expect(seen.map(m => m.t)).toEqual(['startGame', 'turnBegin']);
   });
+
+  // The server drives the war: `nextBattle` moves a Deathmatch to its next battle and `gameOver` ends it.
+  // NetGame already handles both, but only messages RoomClient forwards ever reach it — a battle that
+  // ended left every client parked on the winner screen with the next battle's turn stuck in its queue.
+  it('forwards nextBattle and gameOver so the bridge can advance or finish the war', async () => {
+    const seen: ServerMessage[] = [];
+    const {client, transports} = harness({onGameMessage: (m: ServerMessage) => seen.push(m)});
+    await client.create();
+    const t = transports[0];
+    t.setStatus('open');
+    t.recv({t: 'nextBattle', battle: 2, seed: 99});
+    t.recv({t: 'turnBegin', playerIdx: 0, deadline: 0});
+    t.recv({t: 'gameOver'});
+    expect(seen.map(m => m.t)).toEqual(['nextBattle', 'turnBegin', 'gameOver']);
+  });
 });
