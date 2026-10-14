@@ -306,8 +306,10 @@ export type ServerMessage =
   /** A Deathmatch battle ended but the war continues — advance to a fresh battle. `seed`
    *  regenerates the terrain identically on every client; `battle` is the new battle number. */
   | {readonly t: 'nextBattle'; readonly battle: number; readonly seed: number}
-  /** The match ended; each client shows the standings (winner computed from synced state). */
-  | {readonly t: 'gameOver'}
+  /** The match ended; each client shows the standings (winner computed from synced state).
+   *  `reason: 'abandoned'` = it ended because a player left (not because the war was fought out),
+   *  so a Deathmatch must not wait for a next battle that will never come. */
+  | {readonly t: 'gameOver'; readonly reason?: 'abandoned'}
   // A lockstep divergence was reported in this match — flag every client (incl. late joiners) so
   // the whole room knows the state is contested (detection, not correction).
   | {readonly t: 'desyncFlag'}

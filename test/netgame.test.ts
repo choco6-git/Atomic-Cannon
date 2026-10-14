@@ -15,6 +15,7 @@ import {CTank} from '../src/core/CTank';
 import {NetGame, type NetGameHost} from '../src/net/netGame';
 import {applyCommand, type GameCommand} from '../src/net/commands';
 import type {RoomClient, RoomClientState} from '../src/net/roomClient';
+import {strings} from '../src/i18n';
 import {isValidShotResult, type ClientMessage} from '../src/net/protocol';
 
 const ROSTER = [
@@ -1185,6 +1186,18 @@ describe('network battle-end', () => {
     const gc = netController(1);
     ng2(gc).handle({t: 'gameOver'});
     expect(gc.getState()).toBe(EGameState.BattleEnd);
+  });
+
+  it('an abandoned gameOver ends the WAR even with battles left (no wait for a next battle)', () => {
+    const gc = netController(1); // battle 1 of 2
+    ng2(gc).handle({t: 'gameOver'}); // a plain gameOver mid-war: standings still offer the next battle
+    expect(gc.getWarStandings().warOver).toBe(false);
+    const gc2 = netController(1);
+    ng2(gc2).handle({t: 'gameOver', reason: 'abandoned'});
+    expect(gc2.getState()).toBe(EGameState.BattleEnd);
+    const st = gc2.getWarStandings();
+    expect(st.warOver).toBe(true);
+    expect(st.subtitle).toContain(strings.value.warStandings.opponentLeft);
   });
 });
 

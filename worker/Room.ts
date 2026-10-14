@@ -965,7 +965,7 @@ export class Room {
         await this.disarmTurn(s); // match over → cancel the AFK backstop
         await this.save(s);
         this.broadcast({t: 'roster', players: Room.publicPlayers(s)});
-        this.broadcast({t: 'gameOver'});
+        this.broadcast({t: 'gameOver', reason: 'abandoned'}); // the war wasn't fought out — tell the survivor
         return;
       }
       if (wasActive) {

@@ -501,6 +501,7 @@ export class CGameController implements ShotWorld {
     // own config through this reset.
     if (!this.m_bootingNet) {
       this.m_netMode = false;
+      this.m_netAbandoned = false;
       this.m_netLocalIndex = -1;
       this.m_terrainSeed = null;
       this.m_netRoster = null;
@@ -3446,6 +3447,7 @@ export class CGameController implements ShotWorld {
   /** True once the war's final battle has been played (Deathmatch multi-battle);
    *  Rounds/Points is a single battle, so it is "over" as soon as it ends. */
   private getWarOver(): boolean {
+    if (this.m_netAbandoned) return true;
     return this.m_gameType === EGameType.Deathmatch ? this.m_currentBattle >= this.m_totalBattles : true;
   }
 
@@ -5145,6 +5147,7 @@ export class CGameController implements ShotWorld {
     onCommand?: (cmd: GameCommand) => void;
   }): void {
     this.m_netMode = true;
+    this.m_netAbandoned = false;
     this.m_netLocalIndex = opts.localIndex;
     this.m_terrainSeed = opts.seed >>> 0 || 1;
     this.m_currentBattle = Math.max(1, Math.round(opts.currentBattle)); // 1 fresh; >1 on reconnect
@@ -5447,6 +5450,20 @@ export class CGameController implements ShotWorld {
    *  don't double up. */
   netFinishBattle(): void {
     if (this.m_netMode && this.m_gameState !== EGameState.BattleEnd) this.finishBattle();
+  }
+
+  /** Server-driven: the match is over. `abandoned` = a player left, so the war ends here even if
+   *  Deathmatch battles remain — standings become the final (exit-to-menu) screen instead of
+   *  waiting on a next battle that never comes. Otherwise it is just netFinishBattle. */
+  netEndWar(abandoned: boolean): void {
+    if (!this.m_netMode) return;
+    if (abandoned) this.m_netAbandoned = true;
+    this.netFinishBattle();
+  }
+
+  /** True once the server ended this net match because a player left. */
+  isNetAbandoned(): boolean {
+    return this.m_netAbandoned;
   }
 
   /** Server-driven: a Deathmatch battle ended and the war continues. Regenerate the terrain
@@ -6121,6 +6138,7 @@ export class CGameController implements ShotWorld {
             : fmt(ws.winningWar, {name: leaderName});
 
     const subtitle: string[] = [];
+    if (this.m_netAbandoned) subtitle.push(ws.opponentLeft);
     if (deathmatch && !warOver) {
       subtitle.push(ws.notOver);
       subtitle.push(fmt(ws.battleCompleted, {n: this.m_currentBattle, total: this.m_totalBattles}));
@@ -6319,6 +6337,7 @@ export class CGameController implements ShotWorld {
   // to the local player's tank, and terrain is seeded so every client starts identical.
   private m_netMode = false;
   private m_netLocalIndex = -1; // which tank index this client controls
+  private m_netAbandoned = false; // the server ended the match because a player left
   private m_terrainSeed: number | null = null; // shared seed → identical terrain
   private m_netRoster: {name: string; color: string}[] | null = null;
   private m_onNetTurnEnd: (() => void) | null = null;

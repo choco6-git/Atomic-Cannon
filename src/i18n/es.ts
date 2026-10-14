@@ -951,6 +951,7 @@ export const es: Strings = {
     winsWar: '¡{name} gana la guerra!',
     winningWar: '{name} va ganando la guerra.',
     notOver: 'La guerra aún no termina.',
+    opponentLeft: 'Tu oponente abandonó la partida.',
     battleCompleted: 'Batalla {n} de {total} completada.',
     allDead: '¡Todos los tanques están muertos!',
     draw: '¡Es un empate!',

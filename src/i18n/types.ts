@@ -743,6 +743,7 @@ export interface Strings {
     /** `{name}` is winning the war. */
     winningWar: string;
     notOver: string;
+    opponentLeft: string;
     /** Battle `{n}` of `{total}` completed. */
     battleCompleted: string;
     allDead: string;

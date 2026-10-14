@@ -1106,6 +1106,10 @@ export function syncHud(): void {
     // first: the standings are what the player has to click past now.
     closeBattleOverlays();
     warStandings.value = c.getWarStandings();
+  } else if (atBattleEnd && warStandings.value && !warStandings.value.warOver && c.isNetAbandoned()) {
+    // The opponent left while the between-battles standings were already up: re-derive them as the
+    // final screen (exit prompt + "opponent left" line) rather than offering a next battle.
+    warStandings.value = c.getWarStandings();
   } else if (!atBattleEnd && warStandings.value) warStandings.value = null;
   // Battle Heroes won/lost tally: advance once per battle end (the controller hands
   // the outcome over exactly once, so polling here is safe).

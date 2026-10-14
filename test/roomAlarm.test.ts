@@ -313,3 +313,18 @@ describe('Room shotResult hardening', () => {
     expect(msgs(a).some(m => m.t === 'error' && m.code === 'bad_message')).toBe(true);
   });
 });
+
+describe('Room abandoned match', () => {
+  it('a player leaving a 2-player match tells the survivor the match was abandoned', async () => {
+    const a = makeSocket(1);
+    const b = makeSocket(2);
+    const {room, stored} = makeRoom(playingState({totalBattles: 3}), [a, b]);
+
+    await deliver(room, a, {t: 'leave'});
+
+    expect(stored().phase).toBe('ended');
+    // The survivor must be able to tell this from a war that was fought out (reason), or a
+    // multi-battle Deathmatch would sit waiting for a next battle.
+    expect(msgs(b)).toContainEqual({t: 'gameOver', reason: 'abandoned'});
+  });
+});

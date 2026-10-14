@@ -129,7 +129,13 @@ export class NetGame {
         if (msg.cmd && typeof msg.cmd === 'object') this.dispatch({t: 'cmd', cmd: msg.cmd});
         return;
       case 'gameOver':
-        return this.host.controller.netFinishBattle();
+        // An abandoned match must not advance: drop the queued events and any pending between-battle
+        // timer, or the survivor would sit on a "next battle" the server will never send.
+        if (msg.reason === 'abandoned') {
+          this.m_queue = [];
+          this.cancelIntermission();
+        }
+        return this.host.controller.netEndWar(msg.reason === 'abandoned');
       // chat: handled in a later phase (in-match chat).
     }
   }
