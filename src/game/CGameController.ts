@@ -1169,9 +1169,9 @@ export class CGameController implements ShotWorld {
 
   /**
    * Jet flight (extType 17): the active tank thrusts against gravity until its
-   * fuel runs out and it settles. Flight repositions the tank but does NOT end
-   * the turn; the player still fires afterwards. Other tanks keep falling/settling
-   * passively.
+   * fuel runs out and it settles. Flight repositions the tank; with Utility Turn on
+   * (default) landing ends the turn, otherwise the player still fires afterwards.
+   * Other tanks keep falling/settling passively.
    */
   private updateFlying(dt: number): void {
     const tank = this.getCurrentTank();
@@ -1181,6 +1181,13 @@ export class CGameController implements ShotWorld {
     if (!tank.hasJetFuel() && !tank.isMoving() && !tank.isFalling()) {
       tank.setJetInput(false, false, false);
       this.m_gameState = EGameState.Battle;
+      // The jet is a utility, so it answers to Utility Turn like Move/heal/shield: ON (default) the
+      // landing ends the turn; OFF the flight was free and the human aims on. Every peer decides on
+      // the same synced flag, so a spectator replaying the flight hands off at the same moment.
+      if (GameConfig.utilityTurn || GameConfig.demo) {
+        this.endTurn();
+        return;
+      }
       // Flight's over and the human is aiming again — RESUME the shot clock (paused at ignite, not
       // reset) so jetting can't grant unlimited time to line up the follow-up shot.
       this.armShotClock(false);
@@ -3882,14 +3889,19 @@ export class CGameController implements ShotWorld {
     this.m_audio?.fire(weapon.getFireSound(), tank.getPosition().x);
 
     // Jet (extType 17): light the jet with fuel = damage (5s/15s) and enter the
-    // Flying state. Flight repositions the tank but does NOT end the turn — the
-    // player still fires afterwards. Bots don't fly, so for them it just consumes
-    // the turn.
+    // Flying state. The turn ends when the tank lands (Utility Turn on) or the player
+    // fires afterwards (off) — see updateFlying. Bots don't fly, so for them it just
+    // consumes the turn.
     if (ext === EXT.JET) {
       // A buried tank can't fly out (igniteJet refuses) → fall through to the no-flight path.
       if (tank.isHuman() && tank.igniteJet(weapon.getDamage())) {
         this.m_gameState = EGameState.Flying;
         this.m_lastJetRelay = null; // fresh flight → the first thrust change always relays
+        // Flight is not a resolving shot. fire() flagged it resolving above, and left set it makes every
+        // client "busy" for the whole flight — so a peer QUEUES the relayed jet / cutJet / aim / fire
+        // commands behind it, never flies, never settles, and never sees the next turnBegin, while the
+        // jetter's own turn runs on. The landing's endTurn (or a follow-up fire) re-establishes it.
+        this.m_netShotResolving = false;
       } else {
         this.m_gameState = EGameState.Battle;
         this.schedule(0.4, () => this.endTurn());

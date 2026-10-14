@@ -965,6 +965,42 @@ describe('NetGame bridge', () => {
     expect(cmds[1]).toEqual({t: 'aim', angle: 50, power: 400});
   });
 
+  // The jet is a utility, so landing ends the turn exactly when Utility Turn is on (like Move/heal).
+  describe.each([
+    {utilityTurn: true, endsTurn: true},
+    {utilityTurn: false, endsTurn: false},
+  ])('a Jump Jet flight with Utility Turn $utilityTurn', ({utilityTurn, endsTurn}) => {
+    it(endsTurn ? 'hands the turn on once the tank lands' : 'keeps the turn for the follow-up shot', () => {
+      const {gc, ng, sent} = harness(1); // local index 0
+      ng.handle({
+        t: 'startGame',
+        seed: 999,
+        order: [1, 2],
+        wind: 1,
+        mapSize: 2,
+        battles: 2,
+        tanksPerTeam: 1,
+        currentBattle: 1,
+        viewW: 1280,
+        viewH: 720,
+        config: {...CFG, utilityTurn},
+      });
+      gc.netSetActivePlayer(0);
+      const jetIdx = WEAPON_DATABASE.findIndex(w => w.id === 'jump.jet');
+      expect(gc.buyWeapon(jetIdx)).toBe(true);
+      gc.selectWeapon(jetIdx);
+      gc.fire();
+      expect(gc.getState()).toBe(EGameState.Flying);
+
+      gc.cutJet(); // no thrust: drop the fuel and let it settle
+      for (let i = 0; i < 600; i++) gc.update(1 / 60);
+
+      expect(gc.getState()).not.toBe(EGameState.Flying); // the flight itself is over either way
+      const reported = sent.some(m => m.t === 'shotResult');
+      expect(reported).toBe(endsTurn);
+    });
+  });
+
   it('a relayed opponent shot is SIMULATED on spectators (real shot, not a stream)', () => {
     const {gc, ng} = harness(1);
     ng.handle({
@@ -1236,6 +1272,30 @@ describe('net turn-flow queue', () => {
     busy.m_netShotResolving = true;
     ng.handle({t: 'cmd', from: 2, seq: 2, cmd: {t: 'aim', angle: 45, power: 500}});
     expect(q.m_queue).toHaveLength(1); // busy → queued (not applied to the wrong turn's tank)
+  });
+
+  it("a peer applies the jetter's relayed flight commands instead of queueing them behind the ignite", () => {
+    // fire() flags the turn resolving; a Jump Jet is not a shot, so leaving it set made the peer
+    // QUEUE the relayed jet / cutJet / fire forever: it never flew, never settled, never saw the next
+    // turnBegin, and both players waited on each other.
+    const jetIdx = WEAPON_DATABASE.findIndex(w => w.id === 'jump.jet');
+    expect(jetIdx).toBeGreaterThanOrEqual(0);
+    const gc = netController(1); // we are player 1, watching player 0's turn
+    const ng = ng2(gc);
+    gc.netSetActivePlayer(0);
+    const q = netPriv(ng);
+
+    ng.handle({t: 'cmd', from: 1, seq: 1, cmd: {t: 'selectWeapon', index: jetIdx}});
+    ng.handle({t: 'cmd', from: 1, seq: 2, cmd: {t: 'fire'}});
+    expect(gc.getState()).toBe(EGameState.Flying);
+    expect(gc.isNetSimBusy()).toBe(false); // flight is not a resolving shot
+
+    ng.handle({t: 'cmd', from: 1, seq: 3, cmd: {t: 'jet', up: true, left: false, right: false}});
+    expect(q.m_queue).toHaveLength(0); // applied now, not parked behind the ignite
+    expect(gc.getCurrentTank().isThrustingUp()).toBe(true);
+
+    ng.handle({t: 'cmd', from: 1, seq: 4, cmd: {t: 'cutJet'}});
+    expect(q.m_queue).toHaveLength(0);
   });
 });
 
