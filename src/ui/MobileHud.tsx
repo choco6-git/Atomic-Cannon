@@ -36,10 +36,12 @@ import {
   POWER_MIN,
   POWER_MAX,
   wrapAngle,
+  aimMirror,
   currentWeapon,
   windReadout,
   windIsOff,
 } from './store';
+import {toDisplayAngle} from '../core/aimDisplay';
 
 // ==========================================================================
 // SHEET STATE
@@ -131,7 +133,7 @@ function MobileBar() {
         />
         <Btn
           cls={`mval${off ? ' blocked' : ''}${open('angle')}`}
-          text={`${h.angle} ${angle.value}`}
+          text={`${h.angle} ${toDisplayAngle(angle.value, aimMirror.value)}`}
           onClick={() => toggle('angle')}
           disabled={off}
         />
@@ -235,11 +237,11 @@ function PowerSheet() {
 function AngleSheet() {
   return (
     <Slider
-      value={angle.value}
+      value={toDisplayAngle(angle.value, aimMirror.value)}
       min={0}
       max={359}
       step={1}
-      onValue={v => game().setAngle(wrapAngle(Math.round(v)))}
+      onValue={v => game().setAngle(wrapAngle(toDisplayAngle(v, aimMirror.value)))} // shown → stored (self-inverse)
       fmtValue={v => `${Math.round(v)}°`}
     />
   );

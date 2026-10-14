@@ -28,6 +28,7 @@ import {
   POWER_MIN,
   POWER_MAX,
   wrapAngle,
+  aimMirror,
   turnTimer,
   timerFillStyle,
   teamId,
@@ -46,6 +47,7 @@ import {
   currentWeapon,
   windReadout,
 } from './store';
+import {toDisplayAngle} from '../core/aimDisplay';
 import {MobileHud} from './MobileHud';
 import {weaponPower, weaponDamagePerArea, weaponName, weaponTypeName} from '../core/CWeapon';
 import {strings} from '../i18n';
@@ -257,7 +259,7 @@ function Needle() {
 function AngleReadout() {
   return (
     <ReadoutBox r={R.anglen}>
-      <BmpText font="beijing-16-out" text={`${angle.value}`} />
+      <BmpText font="beijing-16-out" text={`${toDisplayAngle(angle.value, aimMirror.value)}`} />
     </ReadoutBox>
   );
 }

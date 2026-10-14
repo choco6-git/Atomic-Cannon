@@ -5995,6 +5995,13 @@ export class CGameController implements ShotWorld {
     return this.m_wind.x;
   }
 
+  /** Is the acting tank on the right half of the map? The HUD then shows its aim mirrored (see
+   *  core/aimDisplay) so 0 always means the horizon toward the middle. Display only — the stored aim,
+   *  physics and net relay stay world-absolute. */
+  isAimMirrored(): boolean {
+    return this.getCurrentTank().getPosition().x >= this.m_land.width / 2;
+  }
+
   /** Full 2-D wind velocity, for the "Wind Measurements" LCD ("Vel %.02f %.02f"). */
   getWindVec(): {x: number; y: number} {
     return {x: this.m_wind.x, y: this.m_wind.y};

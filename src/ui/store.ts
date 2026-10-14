@@ -782,6 +782,7 @@ export const jetFuel = signal(0);
 // Live HUD values (updated every frame from the controller).
 export const power = signal(500);
 export const angle = signal(45);
+export const aimMirror = signal(false); // acting tank on the right half → the angle is SHOWN mirrored
 export const wind = signal(0);
 export const weaponIndex = signal(0);
 export const playerName = signal('');
@@ -1061,6 +1062,7 @@ export function syncHud(): void {
   if (showDepot.value && !c.canOpenDepot()) closeDepot();
   power.value = Math.round(c.getPower());
   angle.value = Math.round(c.getAngle());
+  aimMirror.value = c.isAimMirrored();
   wind.value = c.getWindValue();
   weaponIndex.value = c.getCurrentWeaponIndex();
   // The selectable list can change with the turn or a buy/sell (the human's control-weapon lock vs.
