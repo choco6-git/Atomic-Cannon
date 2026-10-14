@@ -828,6 +828,12 @@ const BATTLE_COVER_MIN_MS = 300;
 export function advanceWar(): void {
   const s = warStandings.value;
   if (!s) return;
+  // NET, between battles: the SERVER drives the advance (nextBattle → netNextBattle with the shared
+  // seed, after the intermission). A click must not advance locally too — that would bump this
+  // client's battle counter a second time and regenerate the terrain from the wrong seed, leaving it a
+  // whole battle ahead of (and on a different map from) everyone else. Keep the standings up until
+  // the server's advance replaces them. (A war-over click still exits to the menu below.)
+  if (!s.warOver && game().isNetBattleActive()) return;
   warStandings.value = null;
   uiClick();
   game().clearTaunts(); // drop the victor's bubble before leaving the standings
@@ -843,10 +849,9 @@ export function advanceWar(): void {
   // gets the same texture hold as a launch: cover the world and freeze the sim until the new
   // climate is decoded. Without it the battle opens on one frame of new terrain still wearing the
   // previous map's skin — and the render gate would then HOLD that frame (a frozen sim redraws
-  // only on invalidation), so the mismatch sits there for the whole load. Skipped in net play,
-  // where the server drives the advance (netNextBattle) and a local freeze would stall the
-  // netcode. See enterBattle.
-  if (game().isNetBattleActive()) return;
+  // only on invalidation), so the mismatch sits there for the whole load. Not done in net play
+  // (returned above): the server drives that advance and a local freeze would stall the netcode.
+  // See enterBattle.
   const token = ++launchToken;
   loading.value = true;
   freezeSim();
