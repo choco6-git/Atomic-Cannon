@@ -95,12 +95,9 @@ export const es: Strings = {
   net: {
     title: 'Juego en Red',
     create: 'Crear Partida',
-    join: 'Unirse',
     back: 'Atrás',
     leave: 'Salir',
     nameLabel: 'Tu nombre',
-    codeLabel: 'Código de sala',
-    codePlaceholder: 'ABC-D23',
     roomList: {
       title: 'Salas abiertas',
       loading: 'Buscando salas...',

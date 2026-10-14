@@ -155,12 +155,9 @@ export interface Strings {
   net: {
     title: string;
     create: string;
-    join: string;
     back: string;
     leave: string;
     nameLabel: string;
-    codeLabel: string;
-    codePlaceholder: string;
     /** The entry screen's list of rooms open to join. `{n}` in `map` is the map size. */
     roomList: {title: string; loading: string; empty: string; offline: string; mismatch: string; map: string};
     creating: string;

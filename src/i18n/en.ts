@@ -94,12 +94,9 @@ export const en: Strings = {
   net: {
     title: 'Network Game',
     create: 'Create Game',
-    join: 'Join Game',
     back: 'Back',
     leave: 'Leave',
     nameLabel: 'Your name',
-    codeLabel: 'Room code',
-    codePlaceholder: 'ABC-D23',
     roomList: {
       title: 'Open rooms',
       loading: 'Looking for rooms...',

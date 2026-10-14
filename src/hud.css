@@ -2330,12 +2330,6 @@ canvas {
   padding: 6px 9px;
   width: 100%;
 }
-.net-input.net-code {
-  text-align: center;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  font-size: 18px;
-}
 /* Open-room list on the entry screen: one clickable row per room. The whole screen already scrolls
    (ClassicScrollbar), so the list just grows. */
 .net-rooms {

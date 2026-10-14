@@ -1,6 +1,6 @@
 /**
- * Network screen — Create / Join a room by code, then a lobby. Renders from the
- * `netState` signal: entry (create or join), a connecting state, the lobby
+ * Network screen — Create a room or join one from the open-room list, then a lobby. Renders from the
+ * `netState` signal: entry (create, or pick an open room), a connecting state, the lobby
  * (roster + ready + host Start), an error card, and a leave-only panel once the
  * match is playing (from then on the battle HUD is what's on screen).
  */
@@ -12,7 +12,7 @@ import {ClassicScrollbar} from './ClassicScrollbar';
 import {Modal} from './Modal';
 import {CodeDisplay} from './CodeDisplay';
 import {goToMenu, uiMenuBack} from './store';
-import {formatRoomCode, formatCodeInput} from '../net/roomCode';
+import {formatRoomCode} from '../net/roomCode';
 import {isJoinable, type RoomListing} from '../net/roomList';
 import {
   netState,
@@ -82,7 +82,6 @@ function RoomList() {
 
 function Entry() {
   const n = strings.value.net;
-  const [code, setCode] = useState('');
   return (
     <div class="net-panel">
       <BmpText font="bazouk-28" text={n.title} />
@@ -103,25 +102,6 @@ function Entry() {
       <div class="net-divider" />
 
       <RoomList />
-
-      <div class="net-divider" />
-
-      <div class="net-field">
-        <BmpText font="beijing-16-out" text={n.codeLabel} spacing={-1} />
-        <input
-          class="net-input net-code"
-          type="text"
-          maxLength={7}
-          placeholder={n.codePlaceholder}
-          value={code}
-          onInput={e => {
-            const it = (e as InputEvent).inputType;
-            const paste = it === 'insertFromPaste' || it === 'insertFromDrop';
-            setCode(formatCodeInput((e.currentTarget as HTMLInputElement).value, paste));
-          }}
-        />
-      </div>
-      <BigButton label={n.join} onClick={() => joinRoom(code)} disabled={!code.trim()} />
 
       <div class="net-divider" />
       <BigButton label={n.back} onClick={toMenu} />
