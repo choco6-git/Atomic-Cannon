@@ -12,7 +12,7 @@ import {NetGame} from '../net/netGame';
 import {normalizeRoomCode, isValidRoomCode} from '../net/roomCode';
 import {createPersistedSignal} from './persistedSignal';
 import {roster} from './playersStore';
-import {game, screen, paused, goToMenu, setDepotScroll} from './store';
+import {game, screen, paused, goToMenu, setDepotScroll, enterBattleFullscreen} from './store';
 import {strings, fmt} from '../i18n';
 
 const initialState: RoomClientState = {
@@ -154,6 +154,7 @@ function makeClient(): RoomClient {
     controller: game(),
     onMatchStart: () => {
       screen.value = 'battle';
+      enterBattleFullscreen(); // best effort: only works if a click (e.g. Start) was recent
       setDepotScroll(0); // a net match is a new war too, and it never routes through enterBattle
       game().setPaused(false);
       paused.value = false;

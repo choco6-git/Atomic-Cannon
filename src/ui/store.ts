@@ -615,6 +615,30 @@ export function escapeBack(): void {
 // MENU NAVIGATION & BATTLE LAUNCH
 // ==========================================================================
 
+/**
+ * Go fullscreen as a battle starts. Must run inside the click/key that launched it — browsers refuse
+ * `requestFullscreen` without a recent user gesture, so a failure (a dev `?battle=1` boot, a net match
+ * the other side started long after our last click) is swallowed and the battle simply stays windowed.
+ * Skipped on the mobile layout, same as the Settings Full Screen toggle (the API is missing or blocked
+ * there and the touch HUD already fills the screen), and when already fullscreen.
+ *
+ * Escape is also locked (Keyboard Lock API, Chromium only): in fullscreen the browser otherwise eats
+ * the first Esc to leave fullscreen, so it never reaches our handler and can't open the pause menu.
+ * With the lock, Esc is the game's again and HOLDING it leaves fullscreen.
+ */
+export function enterBattleFullscreen(): void {
+  if (isMobile.value || document.fullscreenElement || !document.documentElement.requestFullscreen) {
+    return;
+  }
+  document.documentElement
+    .requestFullscreen()
+    .then(() => {
+      const kb = (navigator as Navigator & {keyboard?: {lock?(keys: string[]): Promise<void>}}).keyboard;
+      return kb?.lock?.(['Escape']);
+    })
+    .catch(() => {}); // no user gesture / denied — play on windowed
+}
+
 /** A match needs at least two teams (humans + computers) to have an opponent. */
 export const MIN_PLAYERS = 2;
 
@@ -627,6 +651,7 @@ function enterBattle(players: number, humans: number, tanksPerTeam: number): voi
   game().getAudio()?.startGameSound(); // the "chunk" as the battle launches
   game().startGame(players); // builds land + tanks, kicks off the texture load + battle music
   screen.value = 'battle';
+  enterBattleFullscreen();
   // A battle is a fresh ROOT, not a stack entry: browser Back can't wander back into /play (or the
   // menu) while the sim is live — the only way out is Quit (goToMenu), which tears the battle down.
   resetRoute();
