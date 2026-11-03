@@ -2162,7 +2162,7 @@
     "size": 10,
     "damage": 200,
     "radius": 10,
-    "cost": 1000,
+    "cost": 2000,
     "type": "Mine",
     "spawn": 5,
     "spread": 4,
