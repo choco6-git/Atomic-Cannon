@@ -23,6 +23,15 @@ import {watchDocumentMeta} from './ui/documentMeta';
 import {resolveAction} from './core/CControls';
 import {bindings} from './ui/controlsStore';
 import {stepWeapon} from './ui/Hud';
+import {
+  aimEntry,
+  backspaceAimEntry,
+  cancelAimEntry,
+  digitOf,
+  resolveAimEntry,
+  toggleAimEntry,
+  typeAimDigit,
+} from './ui/aimEntry';
 import {initProfileSync} from './ui/syncStore';
 import {
   setController,
@@ -296,6 +305,32 @@ export async function startApp(): Promise<void> {
   // actions are resolved through the player's key bindings (Customize Controls); the
   // pressed key maps to an action, so rebinding takes effect immediately.
   document.addEventListener('keydown', e => {
+    // Typing a power/angle value owns the keyboard until Enter/Escape — checked BEFORE the Exit
+    // handling below so Escape cancels the entry instead of opening the pause menu. A turn that ends
+    // (or a menu opening) mid-entry drops it rather than committing onto the wrong tank.
+    const entry = aimEntry.value;
+    if (entry) {
+      if (screen.value !== 'battle' || !canFire.value || isFlying()) {
+        cancelAimEntry();
+      } else {
+        const digit = digitOf(e.code);
+        if (digit) typeAimDigit(digit);
+        else if (e.code === 'Backspace') backspaceAimEntry();
+        else if (e.code === 'Tab') toggleAimEntry();
+        else if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+          const v = resolveAimEntry(entry, gameController.isAimMirrored());
+          if (v !== null) {
+            if (entry.field === 'power') gameController.setPower(v);
+            else gameController.setAngle(v);
+          }
+          cancelAimEntry();
+        } else if (e.code === 'Escape') cancelAimEntry();
+        else return; // unrelated key: leave it to the normal handling
+        e.preventDefault();
+        return;
+      }
+    }
+
     // Escape / the bound Exit action goes ONE LEVEL UP on any screen — a settings sub-page to its
     // parent, a sub-screen to the menu, a battle overlay closed (or, with none open, the pause menu
     // opened). This mirrors the browser Back button (see the router). Skipped while typing in a
@@ -373,6 +408,12 @@ export async function startApp(): Promise<void> {
         gameController.playerTaunt();
         break;
     }
+  });
+
+  // Clicking anywhere while typing a power/angle drops the entry (clicking a readout box re-opens it
+  // from its own click, which fires after this).
+  document.addEventListener('pointerdown', () => {
+    if (aimEntry.value) cancelAimEntry();
   });
 
   // Release thrust on ANY keyup — a key release must always release thrust, even if focus moved into

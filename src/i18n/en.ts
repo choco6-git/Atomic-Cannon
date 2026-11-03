@@ -408,6 +408,8 @@ export const en: Strings = {
     powerTitle: 'Drag to set power (top 1000 · bottom 10)',
     fire: 'FIRE',
     aimTitle: 'Drag left/right to aim',
+    typePower: 'Click to type a power (10-1000)',
+    typeAngle: 'Click to type an angle',
     windOff: 'WIND OFF',
     prevWeapon: 'Previous weapon',
     nextWeapon: 'Next weapon',

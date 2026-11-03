@@ -370,6 +370,8 @@ export interface Strings {
     powerTitle: string;
     fire: string;
     aimTitle: string;
+    typePower: string;
+    typeAngle: string;
     windOff: string;
     // Hotspot tooltips
     prevWeapon: string;

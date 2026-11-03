@@ -469,6 +469,14 @@ canvas {
   pointer-events: none;
 }
 
+/* A power/angle readout just clicked for typing: the current value shown selected (select-all),
+   the way a text box highlights its contents — the first digit typed replaces it. */
+.aim-entry-selected {
+  display: flex;
+  padding: 0 2px;
+  background: #3a6ea5;
+}
+
 .meter-empty {
   background: #090b09;
 }

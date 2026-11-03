@@ -48,6 +48,7 @@ import {
   windReadout,
 } from './store';
 import {toDisplayAngle} from '../core/aimDisplay';
+import {aimEntry, openAimEntry, type AimField} from './aimEntry';
 import {MobileHud} from './MobileHud';
 import {weaponPower, weaponDamagePerArea, weaponName, weaponTypeName} from '../core/CWeapon';
 import {strings} from '../i18n';
@@ -177,7 +178,7 @@ function MeterOverlay() {
         }}
       />
       <ReadoutBox r={R.pnum}>
-        <BmpText font="beijing-16-out" text={String(p)} />
+        <EntryText field="power" live={String(p)} />
       </ReadoutBox>
       <div
         class={`ov meter-drag${blocked.value ? ' blocked' : ''}`}
@@ -256,10 +257,26 @@ function Needle() {
   );
 }
 
+/** A power/angle readout's text. While that field is being entered: the current value highlighted
+ *  (selected — the first digit replaces it), then the typed digits plus a `_` cursor (ASCII only —
+ *  the bitmap fonts have no caret glyph). Otherwise the live value. */
+function EntryText({field, live}: {field: AimField; live: string}) {
+  const e = aimEntry.value;
+  if (!e || e.field !== field) return <BmpText font="beijing-16-out" text={live} />;
+  if (e.selected) {
+    return (
+      <span class="aim-entry-selected">
+        <BmpText font="beijing-16-out" text={e.text} />
+      </span>
+    );
+  }
+  return <BmpText font="beijing-16-out" text={`${e.text}_`} />;
+}
+
 function AngleReadout() {
   return (
     <ReadoutBox r={R.anglen}>
-      <BmpText font="beijing-16-out" text={`${toDisplayAngle(angle.value, aimMirror.value)}`} />
+      <EntryText field="angle" live={`${toDisplayAngle(angle.value, aimMirror.value)}`} />
     </ReadoutBox>
   );
 }
@@ -414,6 +431,7 @@ function ControlPanel() {
       <MeterOverlay />
       <FireButton />
       <TurnTimerBar />
+      <Hotspot r={R.pnum} title={h.typePower} onClick={() => openAimEntry('power')} />
       <Hotspot r={R.buy} title={h.depot} onClick={openDepot} disabled={!canBuyNow.value} />
       <Hotspot
         r={R.reset}
@@ -427,6 +445,8 @@ function ControlPanel() {
       <Needle />
       <AngleReadout />
       <DialGrab />
+      {/* Over DialGrab (which spans the angle box) so a click types a value instead of starting a drag. */}
+      <Hotspot r={R.anglen} title={h.typeAngle} onClick={() => openAimEntry('angle')} />
       <Hotspot r={R.aleft} title={h.aimLeft} onClick={() => dA(2)} />
       <Hotspot r={R.aright} title={h.aimRight} onClick={() => dA(-2)} />
       <WindReadout />

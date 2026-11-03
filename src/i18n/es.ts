@@ -414,6 +414,8 @@ export const es: Strings = {
     powerTitle: 'Arrastra para fijar potencia (arriba 1000 · abajo 10)',
     fire: 'FUEGO',
     aimTitle: 'Arrastra izq./der. para apuntar',
+    typePower: 'Clic para escribir la potencia (10-1000)',
+    typeAngle: 'Clic para escribir el ángulo',
     windOff: 'SIN VIENTO',
     prevWeapon: 'Arma anterior',
     nextWeapon: 'Arma siguiente',
