@@ -32,12 +32,13 @@
 
   /* Full-screen plate backdrops — one dark base + the two panel images (title screen
      for menu/settings, brushed steel for editors + the too-small gate). One source
-     each, so the color and the image string aren't copy-pasted across every screen. */
+     each, so the color and the image string aren't copy-pasted across every screen.
+     The title image is drawn by the TITLE PLATE rules below (whole picture + blurred fill). */
   --bg-base: #10141a;
   --steel-plate: var(--bg-base) url('/assets/panels/steel.webp') center / cover no-repeat;
-  --title-plate: var(--bg-base) url('/assets/panels/title.webp') top center / cover no-repeat;
-  /* Title plate darkened with a flat black wash (Settings / Network screens read text over it). */
-  --title-plate-dim: linear-gradient(rgba(9, 12, 16, 0.55), rgba(9, 12, 16, 0.55)), var(--title-plate);
+  --title-img: url('/assets/panels/title.webp');
+  /* Flat black wash laid over the title plate (Settings / Network screens read text over it). */
+  --title-dim: linear-gradient(rgba(9, 12, 16, 0.55), rgba(9, 12, 16, 0.55));
 
   /* Text inks — dark label on metal (buttons/selected rows), light text on dark panels. */
   --ink-metal: #14171a;
@@ -139,6 +140,47 @@ canvas {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+/* ---- TITLE PLATE ----------------------------------------------------------
+   The title picture is 4:3, and windows are usually wider (16:9), so `cover` cropped a quarter of it
+   off the bottom. It is now shown WHOLE (`contain`, centred, never stretched) and the bars beside it
+   are filled with the same picture scaled to cover and blurred. A CSS background can't be blurred,
+   hence two pseudo-elements: ::before = blurred fill, ::after = the sharp picture (+ an optional wash
+   from --title-wash). Both sit at z-index -1 inside the screen's own stacking context (every host is
+   fixed + z-indexed), so they paint above its base colour and below its content. */
+.mainmenu,
+.settings-screen:not(.bg-steel, .bg-none),
+.net-screen {
+  background: var(--bg-base);
+}
+
+.mainmenu::before,
+.settings-screen:not(.bg-steel, .bg-none)::before,
+.net-screen::before,
+.mainmenu::after,
+.settings-screen:not(.bg-steel, .bg-none)::after,
+.net-screen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.mainmenu::before,
+.settings-screen:not(.bg-steel, .bg-none)::before,
+.net-screen::before {
+  background: var(--title-img) center / cover no-repeat;
+  filter: blur(18px) brightness(0.7);
+}
+
+.mainmenu::after,
+.settings-screen:not(.bg-steel, .bg-none)::after,
+.net-screen::after {
+  background:
+    var(--title-wash, none),
+    var(--title-img) center / contain no-repeat;
 }
 
 /* `bg-none` is the transparent-backdrop screen — only the battle/war standings, which draw OVER
@@ -1169,10 +1211,7 @@ canvas {
 
 /* ============================ MAIN MENU / ABOUT ============================ */
 .mainmenu {
-  /* Fill the width, anchored to the TOP so the title is always visible; only the
-     bottom of the image (desert) is cropped on wide windows — never the title,
-     and no letterbox bars. */
-  background: var(--title-plate);
+  /* Backdrop: the whole title picture over a blurred fill — see TITLE PLATE. */
   /* Centre the nav list with flexbox (NOT a translate transform) so the bitmap-font
      canvases land on whole pixels — a fractional transform renders them fragmented. */
   justify-content: center;
@@ -1476,12 +1515,13 @@ canvas {
    the two transforms never clobber each other. Tune angle via the var. */
 .mainmenu-splash {
   --splash-tilt: -20deg; /* bump toward -45deg for a steeper lean */
-  /* Rendered size of the cover-scaled backdrop (scale = max(vw/1024, vh/768)). */
-  --disp-w: max(100vw, calc(100vh * 1024 / 768));
-  --disp-h: max(100vh, calc(100vw * 768 / 1024));
+  /* Rendered size of the contain-scaled, centred title picture (scale = min(vw/1024, vh/768);
+     see TITLE PLATE), so the badge stays pinned to the logo's corner at any window shape. */
+  --disp-w: min(100vw, calc(100vh * 1024 / 768));
+  --disp-h: min(100vh, calc(100vw * 768 / 1024));
   position: absolute;
   left: calc(50vw + 0.44 * var(--disp-w)); /* corner at 0.953 - 0.5 = 0.453, nudged 0.013 left */
-  top: calc(0.154 * var(--disp-h));
+  top: calc(50vh - 0.346 * var(--disp-h)); /* picture top (50vh - h/2) + 0.154 h */
   z-index: var(--z-screen);
   pointer-events: none; /* purely decorative — never eats clicks meant for the nav */
   /* Anchor by the text's CENTRE (translateX(-50%)) so different-length splash strings
@@ -1931,13 +1971,13 @@ canvas {
    un-dimmed title plate, or the brushed-steel plate (results / doc screens). */
 .settings-screen {
   /* darkened title backdrop (the baked "ATOMIC CANNON" logo), so white-outlined rows read. */
-  background: var(--title-plate-dim);
+  --title-wash: var(--title-dim);
   /* Reserve the bottom band for the absolute subtitle so the scroll host stops above it. */
   padding: 2vh 0 9vh;
 }
 
 .settings-screen.bg-plain {
-  background: var(--title-plate);
+  --title-wash: none;
 }
 
 .settings-screen.bg-steel {
@@ -2299,7 +2339,7 @@ canvas {
    drag can't aim/fire the battle behind it. Same darkened title plate as Settings. */
 .net-screen {
   /* full-screen scaffold shared above; only the unique backdrop + layout below */
-  background: var(--title-plate-dim);
+  --title-wash: var(--title-dim);
   justify-content: flex-start;
 }
 
@@ -3074,7 +3114,7 @@ canvas {
    "ATOMIC CANNON" logo) and just compact the shared, still-centered button list.
    ============================================================================ */
 .mobile .mainmenu {
-  background: var(--title-plate-dim);
+  --title-wash: var(--title-dim);
 }
 
 /* zoom shrinks the list's layout AND its glyph canvases together, so the centered
