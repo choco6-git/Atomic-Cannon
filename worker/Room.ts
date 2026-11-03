@@ -736,9 +736,9 @@ export class Room {
         // A divergence flag tied to the now-discarded terrain no longer applies — clear it so it stops
         // warning every joiner for the rest of the war (resumeMatch re-emits desyncFlag while set).
         s.contested = false;
-        // Open the new battle on the first CONNECTED player (all tanks respawn alive), NOT blindly
-        // position 0 — if order[0] dropped during the previous battle, a blind 0 would hand the turn
-        // to a gone player and stall the whole battle until the ~120s AFK alarm skips it.
+        // Open the new battle on the next side in rotation (battleStartPos — the opening shot alternates
+        // battle to battle), or the first CONNECTED player after it: if that player dropped during the
+        // previous battle, handing them the turn would stall the battle until the ~120s AFK alarm.
         s.turnIdx = this.firstLivingTurn(s);
         const nbDeadline = await this.armTurn(s); // fresh battle → arm the first turn's backstop
         await this.save(s);
@@ -768,7 +768,7 @@ export class Room {
 
     const prevIdx = s.turnIdx;
     s.turnIdx = this.nextLivingTurn(s);
-    const roundWrapped = s.turnIdx <= prevIdx; // advanced past the last player → a round completed
+    const roundWrapped = Room.roundWrapped(s, prevIdx, s.turnIdx); // back round to the battle's opener
     const deadline = await this.armTurn(s); // reset the AFK backstop for the new turn
     await this.save(s);
     roomLog(
@@ -811,13 +811,37 @@ export class Room {
     return (s.turnIdx + 1) % n; // no one playable (shouldn't happen — <2-connected ends the game)
   }
 
-  /** The first playable turn POSITION scanning from 0 INCLUSIVE — used to open a fresh battle. Unlike
-   *  nextLivingTurn (which starts at turnIdx+1), this can land ON position 0. Prevents a new battle
-   *  from being handed to a since-dropped order[0] (a 120s AFK-alarm stall until it self-heals). */
+  /** The turn POSITION that opens battle `s.currentBattle`: the first tank of team
+   *  (battle - 1) mod teams, so the opening shot passes to the next side each battle (2 players:
+   *  A, B, A, ...). Mirrors CGameController.battleStartPos — both must agree. Battle 1 → 0. */
+  private static battleStartPos(s: RoomState): number {
+    const teams = Math.max(1, s.order.length);
+    const team = (Math.max(1, s.currentBattle) - 1) % teams;
+    return s.alternateTurns ? team : team * Math.max(1, s.tanksPerTeam);
+  }
+
+  /** Did the hand-off prevIdx → nextIdx complete a ROUND? A round runs from the battle's opening
+   *  position all the way round, so it is measured RELATIVE to battleStartPos — not to position 0,
+   *  which (with the rotating opener) would cut a battle's first round short. */
+  private static roundWrapped(s: RoomState, prevIdx: number, nextIdx: number): boolean {
+    const n = Math.max(1, Room.totalTanks(s));
+    const start = Room.battleStartPos(s);
+    const rel = (pos: number): number => (((pos - start) % n) + n) % n;
+    return rel(nextIdx) <= rel(prevIdx);
+  }
+
+  /** The first playable turn POSITION scanning from the battle's opening position (battleStartPos)
+   *  INCLUSIVE — used to open a fresh battle. Unlike nextLivingTurn (which starts at turnIdx+1), this
+   *  can land ON the opener. Prevents a new battle from being handed to a since-dropped player (a 120s
+   *  AFK-alarm stall until it self-heals). */
   private firstLivingTurn(s: RoomState): number {
     const n = Room.totalTanks(s);
-    for (let pos = 0; pos < n; pos++) if (this.playablePos(s, pos)) return pos;
-    return 0;
+    const start = Room.battleStartPos(s);
+    for (let k = 0; k < n; k++) {
+      const pos = (start + k) % n;
+      if (this.playablePos(s, pos)) return pos;
+    }
+    return start;
   }
 
   /** Arm the AFK backstop for the turn that's about to begin: record its wall-clock forfeit time on
@@ -857,7 +881,7 @@ export class Room {
     }
     const prevIdx = s.turnIdx;
     s.turnIdx = this.nextLivingTurn(s);
-    const roundWrapped = s.turnIdx <= prevIdx; // advanced past the last player → a round completed
+    const roundWrapped = Room.roundWrapped(s, prevIdx, s.turnIdx); // back round to the battle's opener
     const deadline = await this.armTurn(s);
     await this.save(s);
     roomLog(s.code, `AFK deadline: turn ${prevIdx} forfeited -> turnIdx ${s.turnIdx} newGen=${s.turnGen}`, true);

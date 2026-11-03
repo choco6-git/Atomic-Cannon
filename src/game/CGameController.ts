@@ -3187,12 +3187,15 @@ export class CGameController implements ShotWorld {
     }
 
     // Walk the turn ORDER by position (contiguous by default; Alternate Turns interleaves teams),
-    // skipping dead tanks. A round completes when the position crosses the end of the order.
+    // skipping dead tanks. A round completes when the walk comes back round to the battle's OPENING
+    // position (battleStartPos, which rotates per battle) — not position 0, or a battle opened by the
+    // second side would end its first round after that side alone.
+    const start = this.battleStartPos();
     let wrapped = false,
       attempts = 0;
     let pos = this.turnPosOf(this.m_currentPlayerIndex);
     do {
-      if (pos + 1 >= nPlayers) wrapped = true; // crossed the end → round complete
+      if ((((pos + 1 - start) % nPlayers) + nPlayers) % nPlayers === 0) wrapped = true; // back at the opener
       pos = (pos + 1) % nPlayers;
       this.m_currentPlayerIndex = this.turnTankAt(pos);
       attempts++;
@@ -3231,6 +3234,17 @@ export class CGameController implements ShotWorld {
     const players = Math.max(1, Math.floor(this.squadGridSize() / per));
     if (pos >= players * per) return pos; // appended sentries — identity at the tail
     return (pos % players) * per + Math.floor(pos / players);
+  }
+
+  /** The turn-order POSITION that opens the current battle: the first tank of team
+   *  (battle - 1) mod teams, so the opening shot passes to the next side each battle of a war
+   *  (2 players: A, B, A, ...). Battle 1 is position 0, as before. The server's
+   *  Room.battleStartPos computes the same position for net matches — keep the two in step. */
+  private battleStartPos(): number {
+    const per = Math.max(1, this.m_tanksPerTeam);
+    const teams = Math.max(1, Math.floor(this.squadGridSize() / per));
+    const team = (Math.max(1, this.m_currentBattle) - 1) % teams;
+    return GameConfig.alternateTurns ? team : team * per;
   }
 
   /** Inverse of turnTankAt: the turn-order position of a tank index. */
@@ -3424,7 +3438,9 @@ export class CGameController implements ShotWorld {
     // Randomize Turns: re-shuffle the turn queue for the new battle (never in net — the
     // server arbitrates order; local Math.random() shuffle would desync).
     if (GameConfig.randomizeTurns && !this.m_netMode) this.shuffleTurnOrder();
-    this.m_currentPlayerIndex = 0;
+    // The opening shot passes to the next side each battle (see battleStartPos). In a net match the
+    // server picks the same opener and its turnBegin is what actually hands the turn over.
+    this.m_currentPlayerIndex = this.turnTankAt(this.battleStartPos());
     this.m_winnerName = '';
     this.m_gameState = EGameState.Battle;
     // Fresh camera state for the new battle BEFORE beginTurn — else the previous battle's winning-blast

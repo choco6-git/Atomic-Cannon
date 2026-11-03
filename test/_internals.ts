@@ -93,6 +93,7 @@ export interface GCPriv {
   // ── private methods driven directly ──
   beginTurn(): void;
   endTurn(): void;
+  advanceToNextPlayer(): boolean;
   updateBattle(dt: number): void;
   endBattleIfDecided(): boolean;
   economyFor(tank: CTank): CEconomy;
@@ -279,6 +280,7 @@ export const GC_KEYS: Record<keyof GCPriv, true> = {
   m_onNetTurnEnd: true,
   beginTurn: true,
   endTurn: true,
+  advanceToNextPlayer: true,
   updateBattle: true,
   endBattleIfDecided: true,
   economyFor: true,
