@@ -6,6 +6,7 @@
 .claude/
 .vscode/
 .wrangler/
+.git-credentials
 
 # Dist/packages
 dist/
