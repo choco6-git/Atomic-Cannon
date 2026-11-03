@@ -21,6 +21,7 @@
     "lint": "oxlint --deny-warnings",
     "lint:fix": "oxlint --fix",
     "preview": "vite preview",
+    "serve:local": "./serve-local.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json && tsc -p tsconfig.worker.json"

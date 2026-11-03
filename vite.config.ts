@@ -4,6 +4,10 @@ import pkg from './package.json' with {type: 'json'};
 import {renderShell} from './src/shell.ts';
 import {freePort, pruneDist} from './vite.plugins.ts';
 
+// The multiplayer server (wrangler dev) the client proxies /api + /room to. Overridable so
+// serve-local.sh can run a second, isolated stack on other ports.
+const NET_TARGET = `http://localhost:${process.env.NET_PORT ?? '8787'}`;
+
 export default defineConfig({
   root: '.',
   publicDir: 'public',
@@ -28,8 +32,8 @@ export default defineConfig({
     hmr: false,
     host: true,
     proxy: {
-      '/api': {target: 'http://localhost:8787', changeOrigin: true},
-      '/room': {target: 'http://localhost:8787', changeOrigin: true, ws: true},
+      '/api': {target: NET_TARGET, changeOrigin: true},
+      '/room': {target: NET_TARGET, changeOrigin: true, ws: true},
     },
   },
 });
